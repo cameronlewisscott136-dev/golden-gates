@@ -1,0 +1,8 @@
+{
+  "short_name": "Golden Gates",
+  "name": "Golden Gates Trading Platform",
+  "start_url": ".",
+  "display": "standalone",
+  "theme_color": "#eab308",
+  "background_color": "#ffffff"
+}
