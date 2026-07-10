@@ -21,39 +21,35 @@ if (process.env.NODE_ENV === 'production') {
 // Compression
 app.use(compression());
 
-// Security headers
+// Security headers (relaxed for CORS)
 app.use(helmet({
     contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: false,
+    crossOriginOpenerPolicy: false,
 }));
 
 // ============================================
-// COMPLETE CORS CONFIGURATION - ALLOW ALL
+// CORS - COMPLETE CONFIGURATION
 // ============================================
+
+// Option 1: Allow all origins (Simplest, works everywhere)
 app.use(cors({
-    origin: '*', // Allow all origins
-    credentials: true,
+    origin: '*',
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'],
-    allowedHeaders: [
-        'Content-Type',
-        'Authorization',
-        'X-Requested-With',
-        'Accept',
-        'Origin',
-        'Access-Control-Allow-Origin',
-        'Access-Control-Allow-Headers',
-        'Access-Control-Allow-Methods',
-        'X-Forwarded-For',
-        'X-Real-IP'
-    ],
-    exposedHeaders: ['Content-Range', 'X-Content-Range'],
-    maxAge: 86400, // 24 hours
+    allowedHeaders: ['*'],
+    exposedHeaders: ['*'],
+    credentials: true,
+    maxAge: 86400,
     preflightContinue: false,
     optionsSuccessStatus: 204
 }));
 
+// Handle preflight requests explicitly
+app.options('*', cors());
+
 // ============================================
-// ALTERNATIVE: Specific Origins (More Secure)
+// OR Option 2: Dynamic CORS with logging
 // ============================================
 // const allowedOrigins = [
 //   'https://golden-gates-7xw983mw8-cameronlewisscott136-devs-projects.vercel.app',
@@ -66,20 +62,50 @@ app.use(cors({
 
 // app.use(cors({
 //   origin: function (origin, callback) {
-//     if (!origin) return callback(null, true);
+//     // Allow requests with no origin (like mobile apps or curl)
+//     if (!origin) {
+//       console.log('✅ No origin, allowing');
+//       return callback(null, true);
+//     }
+
+//     console.log(`🔍 CORS request from: ${origin}`);
+
+//     // Check if origin is allowed
 //     if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'development') {
+//       console.log(`✅ CORS allowed: ${origin}`);
 //       callback(null, true);
 //     } else {
-//       console.warn('CORS blocked request from:', origin);
+//       console.warn(`❌ CORS blocked: ${origin}`);
+//       console.warn(`📋 Allowed origins: ${allowedOrigins.join(', ')}`);
 //       callback(new Error('Not allowed by CORS'));
 //     }
 //   },
 //   credentials: true,
-//   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+//   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'],
 //   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
 //   exposedHeaders: ['Content-Range', 'X-Content-Range'],
 //   maxAge: 86400
 // }));
+
+// ============================================
+// Additional CORS middleware for all routes
+// ============================================
+app.use((req, res, next) => {
+    // Set CORS headers for all responses
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-Forwarded-For');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    res.header('Access-Control-Expose-Headers', 'Content-Length, X-Kuma-Revision');
+
+    // Handle preflight requests
+    if (req.method === 'OPTIONS') {
+        console.log('📡 Preflight request handled:', req.url);
+        return res.status(204).end();
+    }
+
+    next();
+});
 
 // Body parser
 app.use(express.json({ limit: '10mb' }));
@@ -92,7 +118,7 @@ if (process.env.NODE_ENV === 'production') {
     app.use(morgan('dev'));
 }
 
-// Rate limiting
+// Rate limiting (disabled validation for proxies)
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 100,
@@ -117,7 +143,7 @@ app.use('/api/transactions', transactionRoutes);
 app.use('/api/referrals', referralRoutes);
 app.use('/api/payments', paymentRoutes);
 
-// Health check with CORS headers
+// Health check with explicit CORS headers
 app.get('/api/health', (req, res) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -130,9 +156,6 @@ app.get('/api/health', (req, res) => {
         cors: 'enabled for all origins'
     });
 });
-
-// Handle preflight requests for all routes
-app.options('*', cors());
 
 // Error handler
 app.use((err, req, res, next) => {
