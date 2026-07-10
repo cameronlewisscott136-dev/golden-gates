@@ -211,7 +211,7 @@ exports.resendVerification = async (req, res) => {
     }
 };
 
-// @desc    Activate account - Now uses PayHero
+// @desc    Activate account - Uses Payment Controller
 // @route   POST /api/auth/activate
 // @access  Private
 exports.activateAccount = async (req, res) => {
@@ -257,10 +257,12 @@ exports.activateAccount = async (req, res) => {
             });
         }
 
-        // Initiate PayHero payment
+        // Generate references
         const timestamp = Date.now();
+        const orderId = `ACT${timestamp}`;
         const externalReference = `ACT${timestamp}`;
 
+        // Initiate PayHero STK Push
         const payheroResult = await payheroService.initiateSTKPush(
             phoneNumber,
             depositAmount,
@@ -278,13 +280,13 @@ exports.activateAccount = async (req, res) => {
         // Create payment record
         const payment = new Payment({
             user: user._id,
-            orderId: `ACT${timestamp}`,
+            orderId,
             externalReference,
             phoneNumber: payheroResult.formattedPhone,
             email: user.email,
             amount: depositAmount,
             customerName: `${user.firstName} ${user.lastName}`,
-            description: 'Account Activation Deposit',
+            description: 'Account Activation Deposit - Golden Gates',
             status: 'pending',
             payheroTransactionId: payheroResult.payheroReference || '',
             paymentChannel: 'mpesa',
@@ -311,6 +313,44 @@ exports.activateAccount = async (req, res) => {
             message: 'Server error during activation'
         });
     }
+};
+
+// Create payment record
+const payment = new Payment({
+    user: user._id,
+    orderId: `ACT${timestamp}`,
+    externalReference,
+    phoneNumber: payheroResult.formattedPhone,
+    email: user.email,
+    amount: depositAmount,
+    customerName: `${user.firstName} ${user.lastName}`,
+    description: 'Account Activation Deposit',
+    status: 'pending',
+    payheroTransactionId: payheroResult.payheroReference || '',
+    paymentChannel: 'mpesa',
+    isActivation: true,
+});
+
+await payment.save();
+
+res.json({
+    success: true,
+    message: 'STK Push sent. Please check your phone for M-Pesa prompt.',
+    data: {
+        externalReference,
+        phoneNumber: payheroResult.formattedPhone,
+        amount: depositAmount,
+        paymentId: payment._id,
+        status: 'pending',
+    }
+});
+    } catch (error) {
+    console.error('Activation error:', error.message);
+    res.status(500).json({
+        success: false,
+        message: 'Server error during activation'
+    });
+}
 };
 
 // @desc    Get current user
