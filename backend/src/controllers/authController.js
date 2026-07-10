@@ -209,86 +209,97 @@ exports.resendVerification = async (req, res) => {
     }
 };
 
-// @desc    Activate account
+// @desc    Activate account - Now uses PayHero
+// @route   POST /api/auth/activate
+// @access  Private
 exports.activateAccount = async (req, res) => {
     try {
-        const { amount } = req.body;
+        const { amount, phoneNumber } = req.body;
         const user = await User.findById(req.user._id);
 
         if (!user) {
-            return res.status(404).json({ success: false, message: 'User not found' });
-        }
-
-        if (user.isActive) {
-            return res.status(400).json({ success: false, message: 'Account already activated' });
-        }
-
-        if (!user.isVerified) {
-            return res.status(400).json({ success: false, message: 'Please verify your email first' });
-        }
-
-        const required = parseInt(process.env.CAPITAL_REQUIRED) || 200;
-        const deposit = parseFloat(amount);
-
-        if (!deposit || deposit < required) {
-            return res.status(400).json({
+            return res.status(404).json({
                 success: false,
-                message: `Minimum deposit is ${required}`
+                message: 'User not found'
             });
         }
 
-        const balanceBefore = user.balance;
-        user.balance += deposit;
-        user.isActive = true;
-        await user.save();
+        if (user.isActive) {
+            return res.status(400).json({
+                success: false,
+                message: 'Account already activated'
+            });
+        }
 
-        await Transaction.create({
+        if (!user.isVerified) {
+            return res.status(400).json({
+                success: false,
+                message: 'Please verify your email first'
+            });
+        }
+
+        const requiredAmount = parseInt(process.env.CAPITAL_REQUIRED) || 200;
+        const depositAmount = parseFloat(amount);
+
+        if (!depositAmount || depositAmount < requiredAmount) {
+            return res.status(400).json({
+                success: false,
+                message: `Minimum deposit for activation is KES ${requiredAmount}`
+            });
+        }
+
+        if (!phoneNumber) {
+            return res.status(400).json({
+                success: false,
+                message: 'Phone number is required for M-Pesa payment'
+            });
+        }
+
+        // Initiate PayHero payment
+        const timestamp = Date.now();
+        const externalReference = `ACT${timestamp}`;
+
+        const payheroResult = await payheroService.initiateSTKPush(
+            phoneNumber,
+            depositAmount,
+            externalReference,
+            `${user.firstName} ${user.lastName}`
+        );
+
+        if (!payheroResult.success) {
+            return res.status(500).json({
+                success: false,
+                message: payheroResult.error || 'Failed to initiate payment'
+            });
+        }
+
+        // Create payment record
+        const payment = new Payment({
             user: user._id,
-            type: 'capital_activation',
-            amount: deposit,
-            balanceBefore,
-            balanceAfter: user.balance,
-            description: `Account activation deposit of ${deposit}`
+            orderId: `ACT${timestamp}`,
+            externalReference,
+            phoneNumber: payheroResult.formattedPhone,
+            email: user.email,
+            amount: depositAmount,
+            customerName: `${user.firstName} ${user.lastName}`,
+            description: 'Account Activation Deposit',
+            status: 'pending',
+            payheroTransactionId: payheroResult.payheroReference || '',
+            paymentChannel: 'mpesa',
+            isActivation: true,
         });
 
-        if (user.referredBy) {
-            const referrer = await User.findById(user.referredBy);
-            if (referrer) {
-                const bonus = parseInt(process.env.REFERRAL_BONUS) || 100;
-                const refBalanceBefore = referrer.balance;
-
-                referrer.balance += bonus;
-                referrer.referralEarnings += bonus;
-                referrer.totalReferrals += 1;
-                await referrer.save();
-
-                await Referral.findOneAndUpdate(
-                    { referrer: referrer._id, referredUser: user._id },
-                    {
-                        status: 'active',
-                        bonusEarned: bonus,
-                        bonusPaid: true,
-                        activatedAt: new Date()
-                    }
-                );
-
-                await Transaction.create({
-                    user: referrer._id,
-                    type: 'referral_bonus',
-                    amount: bonus,
-                    balanceBefore: refBalanceBefore,
-                    balanceAfter: referrer.balance,
-                    description: `Referral bonus for ${user.email}`
-                });
-            }
-        }
+        await payment.save();
 
         res.json({
             success: true,
-            message: 'Account activated successfully',
+            message: 'STK Push sent. Please check your phone for M-Pesa prompt.',
             data: {
-                balance: user.balance,
-                isActive: user.isActive
+                externalReference,
+                phoneNumber: payheroResult.formattedPhone,
+                amount: depositAmount,
+                paymentId: payment._id,
+                status: 'pending',
             }
         });
     } catch (error) {

@@ -63,6 +63,10 @@ const paymentSchema = new mongoose.Schema({
     notes: {
         type: String,
     },
+    isActivation: {
+        type: Boolean,
+        default: false, // True if this is for account activation
+    },
 }, {
     timestamps: true,
 });

@@ -4,15 +4,15 @@ const Transaction = require('../models/Transaction');
 const payheroService = require('../utils/payhero');
 
 // ============================================
-// INITIATE DEPOSIT
+// INITIATE DEPOSIT (For Activation)
 // ============================================
-const initiateDeposit = async (req, res) => {
+const initiateActivationDeposit = async (req, res) => {
     try {
         const { phoneNumber, amount } = req.body;
         const user = await User.findById(req.user._id);
 
         console.log('\n========================================');
-        console.log('💰 DEPOSIT INITIATION - PayHero');
+        console.log('💰 ACCOUNT ACTIVATION - PayHero');
         console.log('========================================');
         console.log(`📱 Phone: ${phoneNumber}`);
         console.log(`💰 Amount: KES ${amount}`);
@@ -26,20 +26,39 @@ const initiateDeposit = async (req, res) => {
             });
         }
 
-        if (Number(amount) < 100) {
+        const requiredAmount = parseInt(process.env.CAPITAL_REQUIRED) || 200;
+        const depositAmount = parseFloat(amount);
+
+        if (!depositAmount || depositAmount < requiredAmount) {
             return res.status(400).json({
                 success: false,
-                message: 'Minimum deposit is KES 100',
+                message: `Minimum deposit for activation is KES ${requiredAmount}`,
+            });
+        }
+
+        // Check if user is already active
+        if (user.isActive) {
+            return res.status(400).json({
+                success: false,
+                message: 'Account already activated',
+            });
+        }
+
+        // Check if user is verified
+        if (!user.isVerified) {
+            return res.status(400).json({
+                success: false,
+                message: 'Please verify your email first',
             });
         }
 
         const timestamp = Date.now();
-        const orderId = `DEP${timestamp}`;
-        const externalReference = `REF${timestamp}`;
+        const orderId = `ACT${timestamp}`;
+        const externalReference = `ACT${timestamp}`;
 
         const result = await payheroService.initiateSTKPush(
             phoneNumber,
-            amount,
+            depositAmount,
             externalReference,
             `${user.firstName} ${user.lastName}`
         );
@@ -59,12 +78,13 @@ const initiateDeposit = async (req, res) => {
             externalReference,
             phoneNumber: result.formattedPhone,
             email: user.email,
-            amount: Math.round(amount),
+            amount: Math.round(depositAmount),
             customerName: `${user.firstName} ${user.lastName}`,
-            description: 'Account Deposit - Golden Gates',
+            description: 'Account Activation Deposit',
             status: 'pending',
             payheroTransactionId: result.payheroReference || '',
             paymentChannel: 'mpesa',
+            isActivation: true, // Mark as activation
         });
 
         await payment.save();
@@ -76,23 +96,26 @@ const initiateDeposit = async (req, res) => {
 
         return res.json({
             success: true,
+            message: 'STK Push sent. Check your phone for the M-Pesa prompt.',
             data: {
                 orderId,
                 externalReference,
-                message: 'STK Push sent. Check your phone for the M-Pesa prompt.',
+                phoneNumber: result.formattedPhone,
+                amount: depositAmount,
+                message: 'Please complete the M-Pesa payment to activate your account.',
             },
         });
     } catch (error) {
-        console.error('❌ Deposit initiation error:', error);
+        console.error('❌ Activation deposit error:', error);
         return res.status(500).json({
             success: false,
-            message: error.message || 'Failed to initiate deposit',
+            message: error.message || 'Failed to initiate activation deposit',
         });
     }
 };
 
 // ============================================
-// PAYHERO WEBHOOK CALLBACK
+// PAYHERO WEBHOOK CALLBACK (Updated for Activation)
 // ============================================
 const payheroCallback = async (req, res) => {
     try {
@@ -158,6 +181,7 @@ const payheroCallback = async (req, res) => {
                 console.log(`🧾 M-Pesa Receipt: ${providerReference}`);
                 console.log(`📧 Customer: ${payment.email}`);
 
+                // Update payment status
                 payment.status = 'completed';
                 payment.mpesaReceiptNumber = providerReference || '';
                 payment.payheroTransactionId = reference || payment.payheroTransactionId;
@@ -166,28 +190,75 @@ const payheroCallback = async (req, res) => {
                 payment.resultDesc = 'Payment successful';
                 await payment.save();
 
-                // Update user balance
+                // Get user
                 const user = await User.findById(payment.user);
-                if (user) {
-                    const balanceBefore = user.balance;
-                    user.balance += payment.amount;
-                    await user.save();
-
-                    // Create transaction record
-                    await Transaction.create({
-                        user: user._id,
-                        type: 'deposit',
-                        amount: payment.amount,
-                        balanceBefore,
-                        balanceAfter: user.balance,
-                        description: `Deposit of KES ${payment.amount} via M-Pesa`,
-                        status: 'completed',
-                        paymentId: payment._id,
-                    });
-
-                    console.log(`✅ User balance updated: ${user.balance}`);
+                if (!user) {
+                    console.error('❌ User not found for payment:', payment.user);
+                    return res.status(200).json({ success: false, message: 'User not found' });
                 }
 
+                // Update user balance
+                const balanceBefore = user.balance;
+                user.balance += payment.amount;
+
+                // If this was an activation payment, activate the account
+                if (payment.isActivation) {
+                    user.isActive = true;
+                    console.log('✅ Account activated for user:', user.email);
+                }
+
+                await user.save();
+
+                // Create transaction record
+                await Transaction.create({
+                    user: user._id,
+                    type: payment.isActivation ? 'capital_activation' : 'deposit',
+                    amount: payment.amount,
+                    balanceBefore,
+                    balanceAfter: user.balance,
+                    description: payment.isActivation
+                        ? `Account activation deposit of KES ${payment.amount} via M-Pesa`
+                        : `Deposit of KES ${payment.amount} via M-Pesa`,
+                    status: 'completed',
+                    paymentId: payment._id,
+                });
+
+                // Process referral bonus if this is activation and user was referred
+                if (payment.isActivation && user.referredBy) {
+                    const referrer = await User.findById(user.referredBy);
+                    if (referrer) {
+                        const bonusAmount = parseInt(process.env.REFERRAL_BONUS) || 100;
+                        const refBalanceBefore = referrer.balance;
+
+                        referrer.balance += bonusAmount;
+                        referrer.referralEarnings += bonusAmount;
+                        referrer.totalReferrals += 1;
+                        await referrer.save();
+
+                        await Referral.findOneAndUpdate(
+                            { referrer: referrer._id, referredUser: user._id },
+                            {
+                                status: 'active',
+                                bonusEarned: bonusAmount,
+                                bonusPaid: true,
+                                activatedAt: new Date()
+                            }
+                        );
+
+                        await Transaction.create({
+                            user: referrer._id,
+                            type: 'referral_bonus',
+                            amount: bonusAmount,
+                            balanceBefore: refBalanceBefore,
+                            balanceAfter: referrer.balance,
+                            description: `Referral bonus for ${user.email}`,
+                        });
+
+                        console.log('✅ Referral bonus processed:', bonusAmount);
+                    }
+                }
+
+                console.log(`✅ User balance updated: ${user.balance}`);
                 break;
             }
             case 'failed':
@@ -255,20 +326,25 @@ const checkPaymentStatus = async (req, res) => {
                     payment.transactionDate = new Date();
                     await payment.save();
 
-                    // Update user balance
+                    // Process the payment completion
                     const user = await User.findById(payment.user);
                     if (user) {
                         const balanceBefore = user.balance;
                         user.balance += payment.amount;
+                        if (payment.isActivation) {
+                            user.isActive = true;
+                        }
                         await user.save();
 
                         await Transaction.create({
                             user: user._id,
-                            type: 'deposit',
+                            type: payment.isActivation ? 'capital_activation' : 'deposit',
                             amount: payment.amount,
                             balanceBefore,
                             balanceAfter: user.balance,
-                            description: `Deposit of KES ${payment.amount} via M-Pesa`,
+                            description: payment.isActivation
+                                ? `Account activation deposit of KES ${payment.amount} via M-Pesa`
+                                : `Deposit of KES ${payment.amount} via M-Pesa`,
                             status: 'completed',
                             paymentId: payment._id,
                         });
@@ -291,6 +367,7 @@ const checkPaymentStatus = async (req, res) => {
                 mpesaReceiptNumber: payment.mpesaReceiptNumber || null,
                 transactionDate: payment.transactionDate || null,
                 amount: payment.amount,
+                isActivation: payment.isActivation,
             },
         });
     } catch (error) {
@@ -324,7 +401,7 @@ const getUserPayments = async (req, res) => {
 };
 
 module.exports = {
-    initiateDeposit,
+    initiateActivationDeposit,
     payheroCallback,
     checkPaymentStatus,
     getUserPayments,

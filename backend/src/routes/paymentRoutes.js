@@ -1,10 +1,10 @@
 const express = require('express');
 const { protect } = require('../middleware/auth');
 const {
-    initiateDeposit,
-    payheroCallback,
-    checkPaymentStatus,
-    getUserPayments,
+  initiateActivationDeposit,
+  payheroCallback,
+  checkPaymentStatus,
+  getUserPayments,
 } = require('../controllers/paymentController');
 
 const router = express.Router();
@@ -14,7 +14,7 @@ router.post('/callback', payheroCallback);
 
 // Protected routes
 router.use(protect);
-router.post('/deposit', initiateDeposit);
+router.post('/deposit', initiateActivationDeposit);
 router.get('/status/:externalReference', checkPaymentStatus);
 router.get('/my-payments', getUserPayments);
 
