@@ -23,18 +23,28 @@ const getAuthHeader = () => {
 
 // Generate API signature
 const generateSignature = (data) => {
+    if (!PAYHERO_API_SECRET) {
+        throw new Error('PAYHERO_API_SECRET is not defined');
+    }
+
     const sorted = Object.keys(data).sort().reduce((obj, key) => {
         obj[key] = data[key];
         return obj;
     }, {});
+
     const stringToSign = JSON.stringify(sorted);
-    return crypto
+    console.log('📝 String to sign:', stringToSign);
+
+    const signature = crypto
         .createHmac('sha256', PAYHERO_API_SECRET)
         .update(stringToSign)
         .digest('hex');
+
+    console.log('✅ Signature generated');
+    return signature;
 };
 
-// Initiate STK Push
+// Initiate STK Push - Using the correct PayHero endpoint
 const initiateSTKPush = async (phoneNumber, amount, externalReference, customerName) => {
     try {
         console.log(`💰 Initiating STK Push for ${phoneNumber} - KES ${amount}`);
@@ -51,36 +61,67 @@ const initiateSTKPush = async (phoneNumber, amount, externalReference, customerN
             callbackUrl: process.env.PAYHERO_CALLBACK_URL,
         };
 
+        console.log('📋 Payload:', JSON.stringify(payload, null, 2));
+
+        // Generate signature
         const signature = generateSignature(payload);
 
-        const response = await axios.post(
-            `${PAYHERO_BASE_URL}/api/v1/payments/stkpush`,
-            payload,
-            {
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': getAuthHeader(),
-                    'X-Signature': signature,
-                    'X-Channel-ID': PAYHERO_CHANNEL_ID,
-                },
-                timeout: 30000,
+        // Try different endpoint formats
+        const endpoints = [
+            '/api/v1/payments/stkpush',
+            '/api/v1/stkpush',
+            '/v1/payments/stkpush',
+            '/payment/stkpush',
+            '/stkpush',
+        ];
+
+        let lastError = null;
+
+        // Try each endpoint
+        for (const endpoint of endpoints) {
+            try {
+                const url = `${PAYHERO_BASE_URL}${endpoint}`;
+                console.log(`🔄 Trying endpoint: ${url}`);
+
+                const response = await axios.post(
+                    url,
+                    payload,
+                    {
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': getAuthHeader(),
+                            'X-Signature': signature,
+                            'X-Channel-ID': PAYHERO_CHANNEL_ID,
+                        },
+                        timeout: 30000,
+                    }
+                );
+
+                console.log('✅ PayHero STK Push initiated successfully');
+                console.log('📋 Response:', response.data);
+
+                return {
+                    success: true,
+                    payheroReference: response.data.reference || response.data.Reference || response.data.transactionId || response.data.id,
+                    formattedPhone: formattedPhone,
+                    data: response.data,
+                };
+            } catch (error) {
+                console.log(`❌ Endpoint ${endpoint} failed:`, error.response?.status || error.message);
+                lastError = error;
+                // Continue to next endpoint
             }
-        );
+        }
 
-        console.log('✅ PayHero STK Push initiated');
-        console.log('📋 Response:', response.data);
+        // If we get here, all endpoints failed
+        console.error('❌ All PayHero endpoints failed');
+        throw lastError || new Error('All PayHero endpoints failed');
 
-        return {
-            success: true,
-            payheroReference: response.data.reference || response.data.Reference || response.data.transactionId,
-            formattedPhone: formattedPhone,
-            data: response.data,
-        };
     } catch (error) {
         console.error('❌ PayHero STK Push error:', error.response?.data || error.message);
         return {
             success: false,
-            error: error.response?.data?.message || error.response?.data?.Message || error.message,
+            error: error.response?.data?.message || error.response?.data?.error_message || error.message,
             details: error.response?.data,
         };
     }
@@ -98,25 +139,47 @@ const checkTransactionStatus = async (externalReference) => {
 
         const signature = generateSignature(payload);
 
-        const response = await axios.post(
-            `${PAYHERO_BASE_URL}/api/v1/payments/status`,
-            payload,
-            {
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': getAuthHeader(),
-                    'X-Signature': signature,
-                    'X-Channel-ID': PAYHERO_CHANNEL_ID,
-                },
-                timeout: 30000,
-            }
-        );
+        const endpoints = [
+            `/api/v1/payments/status`,
+            `/api/v1/status`,
+            `/v1/payments/status`,
+            `/payment/status`,
+        ];
 
-        console.log('✅ Transaction status retrieved');
-        return {
-            success: true,
-            data: response.data,
-        };
+        let lastError = null;
+
+        for (const endpoint of endpoints) {
+            try {
+                const url = `${PAYHERO_BASE_URL}${endpoint}`;
+                console.log(`🔄 Trying status endpoint: ${url}`);
+
+                const response = await axios.post(
+                    url,
+                    payload,
+                    {
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': getAuthHeader(),
+                            'X-Signature': signature,
+                            'X-Channel-ID': PAYHERO_CHANNEL_ID,
+                        },
+                        timeout: 30000,
+                    }
+                );
+
+                console.log('✅ Transaction status retrieved');
+                return {
+                    success: true,
+                    data: response.data,
+                };
+            } catch (error) {
+                console.log(`❌ Status endpoint ${endpoint} failed:`, error.response?.status || error.message);
+                lastError = error;
+            }
+        }
+
+        throw lastError || new Error('All status endpoints failed');
+
     } catch (error) {
         console.error('❌ Status check error:', error.response?.data || error.message);
         return {
