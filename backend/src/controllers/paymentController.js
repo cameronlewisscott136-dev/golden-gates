@@ -83,7 +83,7 @@ const initiateActivationPayment = async (req, res) => {
             email: user.email,
             amount: Math.round(depositAmount),
             customerName: `${user.firstName} ${user.lastName}`,
-            description: "Account Activation Deposit - Golden Gates",
+            description: "Account Activation - Golden Gates",
             status: "pending",
             payheroTransactionId: result.payheroReference || "",
             paymentChannel: "mpesa",
@@ -125,6 +125,21 @@ const payheroCallback = async (req, res) => {
         console.log("\n========================================");
         console.log("📞 PAYHERO CALLBACK RECEIVED");
         console.log("========================================");
+
+        // Verify webhook signature
+        const signature = req.headers['x-signature'] || req.headers['X-Signature'];
+        if (signature) {
+            const isValid = payheroService.verifyWebhookSignature(req.body, signature);
+            if (!isValid) {
+                console.error('❌ Invalid webhook signature');
+                return res.status(401).json({
+                    success: false,
+                    message: 'Invalid signature'
+                });
+            }
+            console.log('✅ Webhook signature verified');
+        }
+
         console.log("Full Body:", JSON.stringify(req.body, null, 2));
         console.log("========================================\n");
 
@@ -136,7 +151,7 @@ const payheroCallback = async (req, res) => {
         let resultCode = null;
         let resultDesc = null;
 
-        // Try different formats
+        // Parse different formats
         if (raw.ExternalReference || raw.external_reference) {
             externalReference = raw.ExternalReference || raw.external_reference;
             status = raw.Status || raw.status;
@@ -219,28 +234,26 @@ const payheroCallback = async (req, res) => {
                 // Update user balance and activate account
                 const balanceBefore = user.balance;
                 user.balance += payment.amount;
-                if (payment.isActivation) {
-                    user.isActive = true;
-                    console.log("✅ Account activated for user:", user.email);
-                }
+                user.isActive = true;
                 await user.save();
+
+                console.log(`✅ Account activated for user: ${user.email}`);
+                console.log(`💰 New balance: KES ${user.balance}`);
 
                 // Create transaction record
                 await Transaction.create({
                     user: user._id,
-                    type: payment.isActivation ? 'capital_activation' : 'deposit',
+                    type: 'capital_activation',
                     amount: payment.amount,
                     balanceBefore,
                     balanceAfter: user.balance,
-                    description: payment.isActivation
-                        ? `Account activation deposit of KES ${payment.amount} via M-Pesa`
-                        : `Deposit of KES ${payment.amount} via M-Pesa`,
+                    description: `Account activation deposit of KES ${payment.amount} via M-Pesa`,
                     status: 'completed',
                     paymentId: payment._id,
                 });
 
-                // Process referral bonus if this is activation and user was referred
-                if (payment.isActivation && user.referredBy) {
+                // Process referral bonus if user was referred
+                if (user.referredBy) {
                     const referrer = await User.findById(user.referredBy);
                     if (referrer) {
                         const bonusAmount = parseInt(process.env.REFERRAL_BONUS) || 100;
@@ -274,7 +287,6 @@ const payheroCallback = async (req, res) => {
                     }
                 }
 
-                console.log(`✅ User balance updated: ${user.balance}`);
                 break;
             }
             case "failed":
@@ -348,23 +360,52 @@ const checkPaymentStatus = async (req, res) => {
                     if (user) {
                         const balanceBefore = user.balance;
                         user.balance += payment.amount;
-                        if (payment.isActivation) {
-                            user.isActive = true;
-                        }
+                        user.isActive = true;
                         await user.save();
 
                         await Transaction.create({
                             user: user._id,
-                            type: payment.isActivation ? 'capital_activation' : 'deposit',
+                            type: 'capital_activation',
                             amount: payment.amount,
                             balanceBefore,
                             balanceAfter: user.balance,
-                            description: payment.isActivation
-                                ? `Account activation deposit of KES ${payment.amount} via M-Pesa`
-                                : `Deposit of KES ${payment.amount} via M-Pesa`,
+                            description: `Account activation deposit of KES ${payment.amount} via M-Pesa`,
                             status: 'completed',
                             paymentId: payment._id,
                         });
+
+                        // Process referral bonus if user was referred
+                        if (user.referredBy) {
+                            const referrer = await User.findById(user.referredBy);
+                            if (referrer) {
+                                const bonusAmount = parseInt(process.env.REFERRAL_BONUS) || 100;
+                                const refBalanceBefore = referrer.balance;
+
+                                referrer.balance += bonusAmount;
+                                referrer.referralEarnings += bonusAmount;
+                                referrer.totalReferrals += 1;
+                                await referrer.save();
+
+                                await Referral.findOneAndUpdate(
+                                    { referrer: referrer._id, referredUser: user._id },
+                                    {
+                                        status: 'active',
+                                        bonusEarned: bonusAmount,
+                                        bonusPaid: true,
+                                        activatedAt: new Date()
+                                    }
+                                );
+
+                                await Transaction.create({
+                                    user: referrer._id,
+                                    type: 'referral_bonus',
+                                    amount: bonusAmount,
+                                    balanceBefore: refBalanceBefore,
+                                    balanceAfter: referrer.balance,
+                                    description: `Referral bonus for ${user.email}`,
+                                });
+                            }
+                        }
                     }
                     console.log("✅ Payment status updated to completed via polling");
                 } else if (["FAILED", "ERROR"].includes(txStatus)) {
@@ -423,19 +464,17 @@ const testCallback = async (req, res) => {
         payment.resultDesc = 'Test payment completed';
         await payment.save();
 
-        // Update user balance
+        // Update user
         const user = await User.findById(payment.user);
         if (user) {
             const balanceBefore = user.balance;
             user.balance += payment.amount;
-            if (payment.isActivation) {
-                user.isActive = true;
-            }
+            user.isActive = true;
             await user.save();
 
             await Transaction.create({
                 user: user._id,
-                type: payment.isActivation ? 'capital_activation' : 'deposit',
+                type: 'capital_activation',
                 amount: payment.amount,
                 balanceBefore,
                 balanceAfter: user.balance,
@@ -443,6 +482,39 @@ const testCallback = async (req, res) => {
                 status: 'completed',
                 paymentId: payment._id,
             });
+
+            // Process referral bonus
+            if (user.referredBy) {
+                const referrer = await User.findById(user.referredBy);
+                if (referrer) {
+                    const bonusAmount = parseInt(process.env.REFERRAL_BONUS) || 100;
+                    const refBalanceBefore = referrer.balance;
+
+                    referrer.balance += bonusAmount;
+                    referrer.referralEarnings += bonusAmount;
+                    referrer.totalReferrals += 1;
+                    await referrer.save();
+
+                    await Referral.findOneAndUpdate(
+                        { referrer: referrer._id, referredUser: user._id },
+                        {
+                            status: 'active',
+                            bonusEarned: bonusAmount,
+                            bonusPaid: true,
+                            activatedAt: new Date()
+                        }
+                    );
+
+                    await Transaction.create({
+                        user: referrer._id,
+                        type: 'referral_bonus',
+                        amount: bonusAmount,
+                        balanceBefore: refBalanceBefore,
+                        balanceAfter: referrer.balance,
+                        description: `Referral bonus for ${user.email}`,
+                    });
+                }
+            }
         }
 
         return res.json({
@@ -483,76 +555,10 @@ const getUserPayments = async (req, res) => {
     }
 };
 
-// ============================================
-// GET PAYMENT BY ORDER ID
-// ============================================
-const getPaymentByOrderId = async (req, res) => {
-    try {
-        const payment = await Payment.findOne({ orderId: req.params.orderId });
-        if (!payment) {
-            return res.status(404).json({ success: false, message: "Payment not found" });
-        }
-        return res.json({ success: true, data: payment });
-    } catch (error) {
-        console.error("❌ Get payment error:", error);
-        return res.status(500).json({ success: false, message: error.message });
-    }
-};
-
-// ============================================
-// ADMIN: GET ALL PAYMENTS
-// ============================================
-const getPayments = async (req, res) => {
-    try {
-        const payments = await Payment.find().sort({ createdAt: -1 });
-        return res.json({ success: true, data: payments });
-    } catch (error) {
-        console.error("❌ Fetch payments error:", error);
-        return res.status(500).json({ success: false, message: error.message });
-    }
-};
-
-// ============================================
-// ADMIN: UPDATE PAYMENT STATUS
-// ============================================
-const updatePaymentStatus = async (req, res) => {
-    try {
-        const { orderId } = req.params;
-        const { status, notes } = req.body;
-
-        const payment = await Payment.findOne({ orderId });
-
-        if (!payment) {
-            return res.status(404).json({ success: false, message: "Payment not found" });
-        }
-
-        if (status) payment.status = status;
-        if (notes) payment.notes = notes;
-
-        if (status === "completed") {
-            payment.transactionDate = new Date();
-        }
-
-        await payment.save();
-
-        return res.json({
-            success: true,
-            message: "Payment status updated",
-            data: payment,
-        });
-    } catch (error) {
-        console.error("❌ Update payment error:", error);
-        return res.status(500).json({ success: false, message: error.message });
-    }
-};
-
 module.exports = {
     initiateActivationPayment,
     payheroCallback,
     checkPaymentStatus,
     getUserPayments,
-    getPaymentByOrderId,
-    getPayments,
-    updatePaymentStatus,
     testCallback,
 };

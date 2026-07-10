@@ -5,9 +5,6 @@ const {
     payheroCallback,
     checkPaymentStatus,
     getUserPayments,
-    getPaymentByOrderId,
-    getPayments,
-    updatePaymentStatus,
     testCallback,
 } = require('../controllers/paymentController');
 
@@ -30,12 +27,5 @@ router.get('/status/:externalReference', checkPaymentStatus);
 
 // Get user's payments
 router.get('/my-payments', getUserPayments);
-
-// Get payment by order ID
-router.get('/order/:orderId', getPaymentByOrderId);
-
-// Admin routes (optional)
-router.get('/all', getPayments);
-router.put('/:orderId/status', updatePaymentStatus);
 
 module.exports = router;

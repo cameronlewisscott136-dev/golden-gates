@@ -34,7 +34,7 @@ const paymentSchema = new mongoose.Schema({
     },
     description: {
         type: String,
-        default: 'Account Deposit',
+        default: 'Account Activation Deposit',
     },
     status: {
         type: String,
@@ -60,12 +60,9 @@ const paymentSchema = new mongoose.Schema({
         type: String,
         default: 'mpesa',
     },
-    notes: {
-        type: String,
-    },
     isActivation: {
         type: Boolean,
-        default: false, // True if this is for account activation
+        default: true,
     },
 }, {
     timestamps: true,
@@ -74,10 +71,10 @@ const paymentSchema = new mongoose.Schema({
 // Generate order ID before saving
 paymentSchema.pre('save', function (next) {
     if (!this.orderId) {
-        this.orderId = `PAY${Date.now()}`;
+        this.orderId = `ACT${Date.now()}`;
     }
     if (!this.externalReference) {
-        this.externalReference = `REF${Date.now()}`;
+        this.externalReference = `ACT${Date.now()}`;
     }
     next();
 });

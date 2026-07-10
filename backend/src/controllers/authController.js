@@ -1,11 +1,11 @@
 const User = require('../models/User');
 const Transaction = require('../models/Transaction');
 const Referral = require('../models/Referral');
+const Payment = require('../models/Payment');
+const payheroService = require('../utils/payhero');
 const bcrypt = require('bcryptjs');
 const { generateToken } = require('../config/jwt');
 const { sendVerificationEmail } = require('../config/email');
-const Payment = require('../models/Payment');
-const payheroService = require('../utils/payhero');
 
 const generateCode = () => Math.floor(100000 + Math.random() * 900000).toString();
 
@@ -211,148 +211,6 @@ exports.resendVerification = async (req, res) => {
     }
 };
 
-// @desc    Activate account - Uses Payment Controller
-// @route   POST /api/auth/activate
-// @access  Private
-exports.activateAccount = async (req, res) => {
-    try {
-        const { amount, phoneNumber } = req.body;
-        const user = await User.findById(req.user._id);
-
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: 'User not found'
-            });
-        }
-
-        if (user.isActive) {
-            return res.status(400).json({
-                success: false,
-                message: 'Account already activated'
-            });
-        }
-
-        if (!user.isVerified) {
-            return res.status(400).json({
-                success: false,
-                message: 'Please verify your email first'
-            });
-        }
-
-        const requiredAmount = parseInt(process.env.CAPITAL_REQUIRED) || 200;
-        const depositAmount = parseFloat(amount);
-
-        if (!depositAmount || depositAmount < requiredAmount) {
-            return res.status(400).json({
-                success: false,
-                message: `Minimum deposit for activation is KES ${requiredAmount}`
-            });
-        }
-
-        if (!phoneNumber) {
-            return res.status(400).json({
-                success: false,
-                message: 'Phone number is required for M-Pesa payment'
-            });
-        }
-
-        // Generate references
-        const timestamp = Date.now();
-        const orderId = `ACT${timestamp}`;
-        const externalReference = `ACT${timestamp}`;
-
-        // Initiate PayHero STK Push
-        const payheroResult = await payheroService.initiateSTKPush(
-            phoneNumber,
-            depositAmount,
-            externalReference,
-            `${user.firstName} ${user.lastName}`
-        );
-
-        if (!payheroResult.success) {
-            return res.status(500).json({
-                success: false,
-                message: payheroResult.error || 'Failed to initiate payment'
-            });
-        }
-
-        // Create payment record
-        const payment = new Payment({
-            user: user._id,
-            orderId,
-            externalReference,
-            phoneNumber: payheroResult.formattedPhone,
-            email: user.email,
-            amount: depositAmount,
-            customerName: `${user.firstName} ${user.lastName}`,
-            description: 'Account Activation Deposit - Golden Gates',
-            status: 'pending',
-            payheroTransactionId: payheroResult.payheroReference || '',
-            paymentChannel: 'mpesa',
-            isActivation: true,
-        });
-
-        await payment.save();
-
-        res.json({
-            success: true,
-            message: 'STK Push sent. Please check your phone for M-Pesa prompt.',
-            data: {
-                externalReference,
-                phoneNumber: payheroResult.formattedPhone,
-                amount: depositAmount,
-                paymentId: payment._id,
-                status: 'pending',
-            }
-        });
-    } catch (error) {
-        console.error('Activation error:', error.message);
-        res.status(500).json({
-            success: false,
-            message: 'Server error during activation'
-        });
-    }
-};
-
-// Create payment record
-const payment = new Payment({
-    user: user._id,
-    orderId: `ACT${timestamp}`,
-    externalReference,
-    phoneNumber: payheroResult.formattedPhone,
-    email: user.email,
-    amount: depositAmount,
-    customerName: `${user.firstName} ${user.lastName}`,
-    description: 'Account Activation Deposit',
-    status: 'pending',
-    payheroTransactionId: payheroResult.payheroReference || '',
-    paymentChannel: 'mpesa',
-    isActivation: true,
-});
-
-await payment.save();
-
-res.json({
-    success: true,
-    message: 'STK Push sent. Please check your phone for M-Pesa prompt.',
-    data: {
-        externalReference,
-        phoneNumber: payheroResult.formattedPhone,
-        amount: depositAmount,
-        paymentId: payment._id,
-        status: 'pending',
-    }
-});
-    } catch (error) {
-    console.error('Activation error:', error.message);
-    res.status(500).json({
-        success: false,
-        message: 'Server error during activation'
-    });
-}
-};
-
 // @desc    Get current user
 exports.getMe = async (req, res) => {
     try {
@@ -381,5 +239,27 @@ exports.getMe = async (req, res) => {
     } catch (error) {
         console.error('Get me error:', error.message);
         res.status(500).json({ success: false, message: 'Server error' });
+    }
+};
+
+// @desc    Check activation status
+exports.checkActivationStatus = async (req, res) => {
+    try {
+        const user = await User.findById(req.user._id);
+
+        res.json({
+            success: true,
+            data: {
+                isActive: user.isActive,
+                isVerified: user.isVerified,
+                balance: user.balance,
+            }
+        });
+    } catch (error) {
+        console.error('Check activation error:', error.message);
+        res.status(500).json({
+            success: false,
+            message: 'Server error'
+        });
     }
 };
