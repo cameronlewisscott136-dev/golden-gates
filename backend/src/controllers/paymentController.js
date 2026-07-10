@@ -13,12 +13,11 @@ const initiateActivationPayment = async (req, res) => {
         const user = await User.findById(req.user._id);
 
         console.log("\n========================================");
-        console.log("💰 ACCOUNT ACTIVATION - PayHero");
+        console.log("🚀 ACCOUNT ACTIVATION - PayHero");
         console.log("========================================");
+        console.log(`👤 User: ${user.email}`);
         console.log(`📱 Phone: ${phoneNumber}`);
-        console.log(`📧 Email: ${user.email}`);
         console.log(`💰 Amount: KES ${amount}`);
-        console.log(`👤 Customer: ${user.firstName} ${user.lastName}`);
         console.log("========================================\n");
 
         // Validation
@@ -79,13 +78,13 @@ const initiateActivationPayment = async (req, res) => {
             user: user._id,
             orderId,
             externalReference,
-            phoneNumber: result.formattedPhone,
+            phoneNumber: result.formattedPhone || phoneNumber,
             email: user.email,
             amount: Math.round(depositAmount),
             customerName: `${user.firstName} ${user.lastName}`,
             description: "Account Activation - Golden Gates",
             status: "pending",
-            payheroTransactionId: result.payheroReference || "",
+            payheroTransactionId: result.payheroReference || result.checkoutRequestId || "",
             paymentChannel: "mpesa",
             isActivation: true,
         });
@@ -95,17 +94,18 @@ const initiateActivationPayment = async (req, res) => {
         console.log("✅ Payment record saved");
         console.log(`📋 Order ID: ${orderId}`);
         console.log(`📱 External Ref: ${externalReference}`);
-        console.log(`🏦 PayHero Ref: ${result.payheroReference}`);
         console.log("========================================\n");
 
         return res.json({
             success: true,
+            message: "STK Push sent. Check your phone for the M-Pesa prompt.",
             data: {
                 orderId,
                 externalReference,
-                phoneNumber: result.formattedPhone,
+                phoneNumber: result.formattedPhone || phoneNumber,
                 amount: depositAmount,
-                message: "STK Push sent. Check your phone for the M-Pesa prompt.",
+                paymentId: payment._id,
+                status: 'pending',
             },
         });
     } catch (error) {
@@ -125,24 +125,10 @@ const payheroCallback = async (req, res) => {
         console.log("\n========================================");
         console.log("📞 PAYHERO CALLBACK RECEIVED");
         console.log("========================================");
-
-        // Verify webhook signature
-        const signature = req.headers['x-signature'] || req.headers['X-Signature'];
-        if (signature) {
-            const isValid = payheroService.verifyWebhookSignature(req.body, signature);
-            if (!isValid) {
-                console.error('❌ Invalid webhook signature');
-                return res.status(401).json({
-                    success: false,
-                    message: 'Invalid signature'
-                });
-            }
-            console.log('✅ Webhook signature verified');
-        }
-
         console.log("Full Body:", JSON.stringify(req.body, null, 2));
         console.log("========================================\n");
 
+        // Parse callback data
         const raw = req.body;
         let externalReference = null;
         let status = null;
@@ -150,66 +136,80 @@ const payheroCallback = async (req, res) => {
         let reference = null;
         let resultCode = null;
         let resultDesc = null;
+        let amount = null;
+        let phoneNumber = null;
 
-        // Parse different formats
-        if (raw.ExternalReference || raw.external_reference) {
-            externalReference = raw.ExternalReference || raw.external_reference;
-            status = raw.Status || raw.status;
-            providerReference = raw.MpesaReceiptNumber || raw.mpesa_receipt || raw.provider_reference || "";
-            reference = raw.MerchantRequestID || raw.reference || "";
-            resultCode = raw.ResultCode;
-            resultDesc = raw.ResultDesc || raw.ResultDescription || "";
-        } else if (raw.response) {
-            const payload = raw.response;
-            externalReference = payload.ExternalReference || payload.external_reference;
-            status = payload.Status || payload.status;
-            providerReference = payload.MpesaReceiptNumber || payload.mpesa_receipt || payload.provider_reference || "";
-            reference = payload.MerchantRequestID || payload.reference || "";
-            resultCode = payload.ResultCode;
-            resultDesc = payload.ResultDesc || payload.ResultDescription || "";
+        // Try different callback formats
+        if (raw.external_reference || raw.ExternalReference) {
+            externalReference = raw.external_reference || raw.ExternalReference;
+            status = raw.status || raw.Status || raw.payment_status;
+            providerReference = raw.provider_reference || raw.mpesa_receipt || raw.MpesaReceiptNumber || raw.receipt_number || "";
+            reference = raw.reference || raw.Reference || raw.transaction_id || "";
+            resultCode = raw.result_code || raw.ResultCode || 0;
+            resultDesc = raw.result_desc || raw.ResultDesc || raw.message || "";
+            amount = raw.amount || 0;
+            phoneNumber = raw.phone_number || raw.PhoneNumber || "";
         } else if (raw.data) {
             const payload = raw.data;
-            externalReference = payload.ExternalReference || payload.external_reference;
-            status = payload.Status || payload.status;
-            providerReference = payload.MpesaReceiptNumber || payload.mpesa_receipt || payload.provider_reference || "";
-            reference = payload.MerchantRequestID || payload.reference || "";
-            resultCode = payload.ResultCode;
-            resultDesc = payload.ResultDesc || payload.ResultDescription || "";
+            externalReference = payload.external_reference || payload.ExternalReference;
+            status = payload.status || payload.Status || payload.payment_status;
+            providerReference = payload.provider_reference || payload.mpesa_receipt || payload.MpesaReceiptNumber || "";
+            reference = payload.reference || payload.Reference || payload.transaction_id || "";
+            resultCode = payload.result_code || payload.ResultCode || 0;
+            resultDesc = payload.result_desc || payload.ResultDesc || payload.message || "";
+            amount = payload.amount || 0;
+            phoneNumber = payload.phone_number || payload.PhoneNumber || "";
         }
 
         console.log("📋 Parsed callback:", {
             externalReference,
             status,
             providerReference,
+            reference,
             resultCode,
             resultDesc,
+            amount,
+            phoneNumber,
         });
 
         if (!externalReference) {
             console.error("❌ No external_reference in callback");
-            return res.status(200).json({ success: false, message: "Missing external_reference" });
+            return res.status(200).json({
+                success: false,
+                message: "Missing external_reference"
+            });
         }
 
-        const payment = await Payment.findOne({ externalReference: externalReference });
+        // Find payment
+        const payment = await Payment.findOne({ externalReference });
 
         if (!payment) {
             console.error("❌ Payment not found for ref:", externalReference);
-            return res.status(200).json({ success: false, message: "Payment record not found" });
+            return res.status(200).json({
+                success: false,
+                message: "Payment record not found"
+            });
         }
 
+        // Check if already processed
         const terminalStatuses = ["completed", "failed", "timeout", "cancelled"];
         if (terminalStatuses.includes(payment.status)) {
             console.log(`ℹ️ Payment already in terminal state: ${payment.status}. Skipping.`);
-            return res.status(200).json({ success: true, message: "Already processed" });
+            return res.status(200).json({
+                success: true,
+                message: "Already processed"
+            });
         }
 
+        // Normalize status
         const normStatus = (status || "").toString().toLowerCase().trim();
         console.log(`📊 Normalized status: ${normStatus}`);
 
         switch (normStatus) {
             case "success":
             case "completed":
-            case "settled": {
+            case "settled":
+            case "paid": {
                 console.log("\n✅ PAYMENT SUCCESSFUL!");
                 console.log(`💰 Amount: KES ${payment.amount}`);
                 console.log(`🧾 M-Pesa Receipt: ${providerReference}`);
@@ -221,14 +221,17 @@ const payheroCallback = async (req, res) => {
                 payment.payheroTransactionId = reference || payment.payheroTransactionId;
                 payment.transactionDate = new Date();
                 payment.resultCode = resultCode || 0;
-                payment.resultDesc = "Payment successful";
+                payment.resultDesc = resultDesc || "Payment successful";
                 await payment.save();
 
                 // Get user
                 const user = await User.findById(payment.user);
                 if (!user) {
                     console.error("❌ User not found for payment:", payment.user);
-                    return res.status(200).json({ success: false, message: "User not found" });
+                    return res.status(200).json({
+                        success: false,
+                        message: "User not found"
+                    });
                 }
 
                 // Update user balance and activate account
@@ -315,13 +318,20 @@ const payheroCallback = async (req, res) => {
             }
             default: {
                 console.log(`⚠️ Unknown callback status: ${status}`);
+                // Don't change status for unknown statuses
             }
         }
 
-        return res.status(200).json({ success: true, message: "Callback processed" });
+        return res.status(200).json({
+            success: true,
+            message: "Callback processed"
+        });
     } catch (error) {
         console.error("❌ Callback processing error:", error);
-        return res.status(200).json({ success: false, message: "Callback processing failed" });
+        return res.status(200).json({
+            success: false,
+            message: "Callback processing failed"
+        });
     }
 };
 
@@ -337,9 +347,13 @@ const checkPaymentStatus = async (req, res) => {
         const payment = await Payment.findOne({ externalReference });
 
         if (!payment) {
-            return res.status(404).json({ success: false, message: "Payment not found" });
+            return res.status(404).json({
+                success: false,
+                message: "Payment not found"
+            });
         }
 
+        // If status is pending, check with PayHero
         if (payment.status === "pending") {
             console.log("⏳ Status is pending, checking with PayHero...");
             const result = await payheroService.checkTransactionStatus(externalReference);
@@ -348,8 +362,8 @@ const checkPaymentStatus = async (req, res) => {
                 const txStatus = (result.data.status || "").toUpperCase();
                 console.log(`📊 PayHero status: ${txStatus}`);
 
-                if (txStatus === "SUCCESS" || txStatus === "COMPLETED") {
-                    // Process successful payment
+                if (txStatus === "SUCCESS" || txStatus === "COMPLETED" || txStatus === "PAID") {
+                    // Update payment
                     payment.status = "completed";
                     payment.mpesaReceiptNumber = result.data.mpesa_receipt || "";
                     payment.transactionDate = new Date();
@@ -374,7 +388,7 @@ const checkPaymentStatus = async (req, res) => {
                             paymentId: payment._id,
                         });
 
-                        // Process referral bonus if user was referred
+                        // Process referral bonus
                         if (user.referredBy) {
                             const referrer = await User.findById(user.referredBy);
                             if (referrer) {
@@ -431,6 +445,8 @@ const checkPaymentStatus = async (req, res) => {
                 customerName: payment.customerName,
                 amount: payment.amount,
                 isActivation: payment.isActivation,
+                orderId: payment.orderId,
+                externalReference: payment.externalReference,
             },
         });
     } catch (error) {
@@ -454,9 +470,13 @@ const testCallback = async (req, res) => {
         const payment = await Payment.findOne({ externalReference });
 
         if (!payment) {
-            return res.status(404).json({ success: false, message: 'Payment not found' });
+            return res.status(404).json({
+                success: false,
+                message: 'Payment not found'
+            });
         }
 
+        // Update payment
         payment.status = 'completed';
         payment.mpesaReceiptNumber = 'TEST' + Date.now();
         payment.transactionDate = new Date();
@@ -530,7 +550,10 @@ const testCallback = async (req, res) => {
         });
     } catch (error) {
         console.error('❌ [TEST] Error:', error);
-        return res.status(500).json({ success: false, message: error.message });
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
     }
 };
 
@@ -555,10 +578,123 @@ const getUserPayments = async (req, res) => {
     }
 };
 
+// ============================================
+// GET PAYMENT BY ORDER ID
+// ============================================
+const getPaymentByOrderId = async (req, res) => {
+    try {
+        const payment = await Payment.findOne({ orderId: req.params.orderId });
+        if (!payment) {
+            return res.status(404).json({
+                success: false,
+                message: "Payment not found"
+            });
+        }
+        return res.json({
+            success: true,
+            data: payment
+        });
+    } catch (error) {
+        console.error("❌ Get payment error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+// ============================================
+// ADMIN: GET ALL PAYMENTS
+// ============================================
+const getPayments = async (req, res) => {
+    try {
+        const payments = await Payment.find()
+            .populate('user', 'email firstName lastName')
+            .sort({ createdAt: -1 });
+        return res.json({
+            success: true,
+            data: payments
+        });
+    } catch (error) {
+        console.error("❌ Fetch payments error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+// ============================================
+// ADMIN: UPDATE PAYMENT STATUS
+// ============================================
+const updatePaymentStatus = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const { status, notes } = req.body;
+
+        const payment = await Payment.findOne({ orderId });
+
+        if (!payment) {
+            return res.status(404).json({
+                success: false,
+                message: "Payment not found"
+            });
+        }
+
+        if (status) payment.status = status;
+        if (notes) payment.notes = notes;
+
+        if (status === "completed") {
+            payment.transactionDate = new Date();
+            // Also update user if this was an activation payment
+            if (payment.isActivation) {
+                const user = await User.findById(payment.user);
+                if (user && !user.isActive) {
+                    const balanceBefore = user.balance;
+                    user.balance += payment.amount;
+                    user.isActive = true;
+                    await user.save();
+
+                    await Transaction.create({
+                        user: user._id,
+                        type: 'capital_activation',
+                        amount: payment.amount,
+                        balanceBefore,
+                        balanceAfter: user.balance,
+                        description: `Account activation deposit of KES ${payment.amount} via admin`,
+                        status: 'completed',
+                        paymentId: payment._id,
+                    });
+                }
+            }
+        }
+
+        await payment.save();
+
+        return res.json({
+            success: true,
+            message: "Payment status updated",
+            data: payment,
+        });
+    } catch (error) {
+        console.error("❌ Update payment error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+// ============================================
+// EXPORT ALL FUNCTIONS
+// ============================================
 module.exports = {
     initiateActivationPayment,
     payheroCallback,
     checkPaymentStatus,
     getUserPayments,
+    getPaymentByOrderId,
+    getPayments,
+    updatePaymentStatus,
     testCallback,
 };

@@ -1,246 +1,191 @@
+const https = require('https');
 const axios = require('axios');
-const crypto = require('crypto');
 
-// PayHero configuration
-const PAYHERO_BASE_URL = process.env.PAYHERO_BASE_URL || 'https://api.payhero.co.ke';
-const PAYHERO_API_SECRET = process.env.PAYHERO_API_SECRET;
-const PAYHERO_BASIC_AUTH_TOKEN = process.env.PAYHERO_BASIC_AUTH_TOKEN;
-const PAYHERO_CHANNEL_ID = process.env.PAYHERO_CHANNEL_ID;
-const PAYHERO_PASSWORD = process.env.PAYHERO_PASSWORD;
-const PAYHERO_USERNAME = process.env.PAYHERO_USERNAME;
+// PayHero's API returns a malformed or missing Content-Encoding header that
+// causes Node's zlib to throw "incorrect header check" when axios tries to
+// auto-decompress. Disabling decompress fixes it.
+const payheroAxios = axios.create({
+    decompress: false,          // don't let axios/zlib touch the response body
+    httpsAgent: new https.Agent({ rejectUnauthorized: true }),
+});
 
-// Generate Basic Auth header
-const getAuthHeader = () => {
-    if (PAYHERO_BASIC_AUTH_TOKEN) {
-        return `Basic ${PAYHERO_BASIC_AUTH_TOKEN}`;
-    }
-    if (PAYHERO_USERNAME && PAYHERO_PASSWORD) {
-        const credentials = Buffer.from(`${PAYHERO_USERNAME}:${PAYHERO_PASSWORD}`).toString('base64');
-        return `Basic ${credentials}`;
-    }
-    throw new Error('PayHero credentials not configured');
-};
+class PayHeroService {
+    constructor() {
+        // Use the Basic Auth token directly from env
+        this.authToken = process.env.PAYHERO_BASIC_AUTH_TOKEN;
+        this.channelId = parseInt(process.env.PAYHERO_CHANNEL_ID);
+        this.baseUrl = process.env.PAYHERO_BASE_URL || 'https://backend.payhero.co.ke/api/v2';
 
-// Generate API signature
-const generateSignature = (data) => {
-    if (!PAYHERO_API_SECRET) {
-        throw new Error('PAYHERO_API_SECRET is not defined');
+        console.log('========================================');
+        console.log('🏦 PayHero Service Initialized');
+        console.log(`📱 Channel ID: ${this.channelId}`);
+        console.log(`🔑 Auth Token: ${this.authToken ? '✅ Set' : '❌ Missing'}`);
+        console.log(`🌐 Base URL: ${this.baseUrl}`);
+        console.log('========================================');
     }
 
-    const sorted = Object.keys(data).sort().reduce((obj, key) => {
-        obj[key] = data[key];
-        return obj;
-    }, {});
-
-    const stringToSign = JSON.stringify(sorted);
-    console.log('📝 String to sign:', stringToSign);
-
-    const signature = crypto
-        .createHmac('sha256', PAYHERO_API_SECRET)
-        .update(stringToSign)
-        .digest('hex');
-
-    console.log('✅ Signature generated');
-    return signature;
-};
-
-// Initiate STK Push - Using correct PayHero format
-const initiateSTKPush = async (phoneNumber, amount, externalReference, customerName) => {
-    try {
-        console.log(`💰 Initiating STK Push for ${phoneNumber} - KES ${amount}`);
-
-        const formattedPhone = phoneNumber.replace(/^0+/, '254');
-
-        // Prepare payload according to PayHero API format
-        const payload = {
-            channelId: PAYHERO_CHANNEL_ID,
-            phoneNumber: formattedPhone,
-            amount: Math.round(amount),
-            externalReference: externalReference,
-            customerName: customerName || 'Customer',
-            description: 'Account Activation - Golden Gates',
-            callbackUrl: process.env.PAYHERO_CALLBACK_URL || 'https://golden-gates-oegh.onrender.com/api/payments/callback',
-        };
-
-        console.log('📋 Payload:', JSON.stringify(payload, null, 2));
-
-        // Generate signature
-        const signature = generateSignature(payload);
-
-        // Try different endpoint formats - Based on common PayHero API patterns
-        const endpoints = [
-            '/api/v1/stkpush',
-            '/v1/stkpush',
-            '/stkpush',
-            '/api/stkpush',
-            '/payment/stkpush',
-        ];
-
-        let lastError = null;
-        let successResponse = null;
-
-        // Try each endpoint
-        for (const endpoint of endpoints) {
-            try {
-                const url = `${PAYHERO_BASE_URL}${endpoint}`;
-                console.log(`🔄 Trying endpoint: ${url}`);
-
-                const response = await axios.post(
-                    url,
-                    payload,
-                    {
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': getAuthHeader(),
-                            'X-Signature': signature,
-                            'X-Channel-ID': PAYHERO_CHANNEL_ID,
-                        },
-                        timeout: 30000,
-                    }
-                );
-
-                console.log('✅ PayHero STK Push initiated successfully');
-                console.log('📋 Response:', JSON.stringify(response.data, null, 2));
-
-                successResponse = {
-                    success: true,
-                    payheroReference: response.data.reference || response.data.Reference || response.data.transactionId || response.data.id || response.data.transactionReference,
-                    formattedPhone: formattedPhone,
-                    data: response.data,
-                };
-                break;
-            } catch (error) {
-                console.log(`❌ Endpoint ${endpoint} failed:`, error.response?.status, error.response?.data || error.message);
-                lastError = error;
-                // Continue to next endpoint
-            }
+    /**
+     * Format phone: 0712345678 → 0712345678 (PayHero wants local format)
+     * Or 254712345678 → keep as is
+     * PayHero accepts both; we'll send local format to be safe.
+     */
+    formatPhone(phoneNumber) {
+        let phone = phoneNumber.replace(/\s+/g, '').replace(/^\+/, '');
+        // PayHero wants local format: 07XXXXXXXXX
+        if (phone.startsWith('254') && phone.length === 12) {
+            phone = '0' + phone.substring(3);
         }
-
-        if (successResponse) {
-            return successResponse;
-        }
-
-        // If we get here, all endpoints failed
-        console.error('❌ All PayHero endpoints failed');
-        throw lastError || new Error('All PayHero endpoints failed');
-
-    } catch (error) {
-        console.error('❌ PayHero STK Push error:', error.response?.data || error.message);
-        return {
-            success: false,
-            error: error.response?.data?.message || error.response?.data?.error_message || error.message,
-            details: error.response?.data,
-        };
+        return phone;
     }
-};
 
-// Check transaction status
-const checkTransactionStatus = async (externalReference) => {
-    try {
-        console.log(`🔍 Checking transaction status for: ${externalReference}`);
-
-        const payload = {
-            externalReference: externalReference,
-            channelId: PAYHERO_CHANNEL_ID,
-        };
-
-        const signature = generateSignature(payload);
-
-        const endpoints = [
-            `/api/v1/status`,
-            `/v1/status`,
-            `/status`,
-            `/api/status`,
-        ];
-
-        let lastError = null;
-
-        for (const endpoint of endpoints) {
-            try {
-                const url = `${PAYHERO_BASE_URL}${endpoint}`;
-                console.log(`🔄 Trying status endpoint: ${url}`);
-
-                const response = await axios.post(
-                    url,
-                    payload,
-                    {
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Authorization': getAuthHeader(),
-                            'X-Signature': signature,
-                            'X-Channel-ID': PAYHERO_CHANNEL_ID,
-                        },
-                        timeout: 30000,
-                    }
-                );
-
-                console.log('✅ Transaction status retrieved');
-                return {
-                    success: true,
-                    data: response.data,
-                };
-            } catch (error) {
-                console.log(`❌ Status endpoint ${endpoint} failed:`, error.response?.status || error.message);
-                lastError = error;
-            }
-        }
-
-        throw lastError || new Error('All status endpoints failed');
-
-    } catch (error) {
-        console.error('❌ Status check error:', error.response?.data || error.message);
-        return {
-            success: false,
-            error: error.response?.data?.message || error.message,
-            details: error.response?.data,
-        };
-    }
-};
-
-// Verify webhook signature
-const verifyWebhookSignature = (payload, signature) => {
-    try {
-        const expectedSignature = generateSignature(payload);
-        return expectedSignature === signature;
-    } catch (error) {
-        console.error('❌ Signature verification failed:', error.message);
-        return false;
-    }
-};
-
-// Test endpoint connectivity
-const testConnection = async () => {
-    console.log('🔍 Testing PayHero API connectivity...');
-
-    const testEndpoints = [
-        '/api/v1/stkpush',
-        '/v1/stkpush',
-        '/stkpush',
-    ];
-
-    for (const endpoint of testEndpoints) {
+    /**
+     * Initiate M-Pesa STK Push via PayHero
+     * POST https://backend.payhero.co.ke/api/v2/payments
+     */
+    async initiateSTKPush(phoneNumber, amount, externalReference, customerName) {
         try {
-            const url = `${PAYHERO_BASE_URL}${endpoint}`;
-            console.log(`Testing: ${url}`);
-            // Just test if endpoint exists
-            await axios.options(url, {
-                headers: {
-                    'Authorization': getAuthHeader(),
-                },
-                timeout: 5000,
-            });
-            console.log(`✅ Working: ${endpoint}`);
-            return true;
+            const formattedPhone = this.formatPhone(phoneNumber);
+
+            console.log('\n📱 PayHero STK Push');
+            console.log('----------------------------------------');
+            console.log(`💰 Amount: KES ${amount}`);
+            console.log(`📱 Phone: ${formattedPhone}`);
+            console.log(`📋 Reference: ${externalReference}`);
+            console.log(`👤 Name: ${customerName}`);
+            console.log('----------------------------------------');
+
+            const payload = {
+                amount: Math.round(amount),
+                phone_number: formattedPhone,
+                channel_id: parseInt(this.channelId),
+                network_code: '63902',
+                provider: 'm-pesa',
+                external_reference: externalReference,
+                callback_url: process.env.PAYHERO_CALLBACK_URL || 'https://golden-gates-oegh.onrender.com/api/payments/callback',
+            };
+
+            console.log('📞 Formatted phone:', formattedPhone);
+            console.log('📤 Payload:', JSON.stringify(payload, null, 2));
+
+            const response = await payheroAxios.post(
+                `${this.baseUrl}/payments`,
+                payload,
+                {
+                    headers: {
+                        Authorization: this.authToken,
+                        'Content-Type': 'application/json',
+                        'Accept-Encoding': 'identity',   // tell server: no compression please
+                    },
+                    timeout: 30000,
+                }
+            );
+
+            // payheroAxios returns raw buffer when decompress:false — parse it
+            const responseData = typeof response.data === 'string'
+                ? JSON.parse(response.data)
+                : Buffer.isBuffer(response.data)
+                    ? JSON.parse(response.data.toString('utf8'))
+                    : response.data;
+
+            console.log('✅ STK Push response:', JSON.stringify(responseData, null, 2));
+            console.log('----------------------------------------\n');
+
+            return {
+                success: true,
+                data: responseData,
+                formattedPhone,
+                payheroReference: responseData?.reference || responseData?.Reference || null,
+                checkoutRequestId: responseData?.CheckoutRequestID || null,
+            };
+
         } catch (error) {
-            console.log(`❌ Failed: ${endpoint} - ${error.message}`);
+            // Parse raw buffer error body if decompress:false is active
+            let errorData = error.response?.data;
+            if (Buffer.isBuffer(errorData)) {
+                try { errorData = JSON.parse(errorData.toString('utf8')); } catch (e) { }
+            }
+
+            console.error('❌ PayHero STK Push Error:');
+            console.error('Status:', error.response?.status);
+            console.error('Data:', JSON.stringify(errorData, null, 2));
+            console.error('Message:', error.message);
+
+            const errorMessage =
+                errorData?.error_message ||
+                errorData?.message ||
+                errorData?.detail ||
+                error.message;
+
+            return {
+                success: false,
+                error: errorMessage,
+                errorData,
+                status: error.response?.status,
+            };
         }
     }
-    return false;
-};
 
-module.exports = {
-    initiateSTKPush,
-    checkTransactionStatus,
-    verifyWebhookSignature,
-    testConnection,
-};
+    /**
+     * Check transaction status by external_reference
+     */
+    async checkTransactionStatus(externalReference) {
+        try {
+            console.log(`🔍 Checking transaction status for: ${externalReference}`);
+
+            const response = await payheroAxios.get(
+                `${this.baseUrl}/payments`,
+                {
+                    params: { external_reference: externalReference },
+                    headers: {
+                        Authorization: this.authToken,
+                        'Accept-Encoding': 'identity',
+                    },
+                    timeout: 15000,
+                }
+            );
+
+            // Parse response if needed
+            const responseData = typeof response.data === 'string'
+                ? JSON.parse(response.data)
+                : Buffer.isBuffer(response.data)
+                    ? JSON.parse(response.data.toString('utf8'))
+                    : response.data;
+
+            // Find our record
+            const records = responseData?.payments || responseData?.data || [];
+            const record = Array.isArray(records)
+                ? records.find(r => r.external_reference === externalReference)
+                : responseData;
+
+            if (!record) {
+                return { success: false, error: 'Transaction not found in PayHero' };
+            }
+
+            console.log('✅ Transaction status retrieved:', record);
+
+            return {
+                success: true,
+                data: {
+                    status: record.status,                          // SUCCESS | FAILED | PENDING etc.
+                    mpesa_receipt: record.provider_reference || record.mpesa_receipt || '',
+                    amount: record.amount,
+                    phone: record.phone_number,
+                },
+            };
+
+        } catch (error) {
+            let errorData = error.response?.data;
+            if (Buffer.isBuffer(errorData)) {
+                try { errorData = JSON.parse(errorData.toString('utf8')); } catch (e) { }
+            }
+
+            console.error('❌ PayHero status check error:', errorData || error.message);
+            return {
+                success: false,
+                error: errorData?.message || error.message,
+            };
+        }
+    }
+}
+
+module.exports = new PayHeroService();
