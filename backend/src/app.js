@@ -13,15 +13,51 @@ const paymentRoutes = require('./routes/paymentRoutes');
 
 const app = express();
 
-// Trust proxy for production
-if (process.env.NODE_ENV === 'production') {
-    app.set('trust proxy', 1);
-}
+// ============================================
+// CRITICAL: CORS MUST BE THE FIRST MIDDLEWARE
+// ============================================
 
-// Compression
-app.use(compression());
+// 1. First - Handle OPTIONS requests for ALL routes
+app.options('*', (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Max-Age', '86400');
+    res.status(204).end();
+});
 
-// Relaxed security headers
+// 2. Second - CORS middleware for all requests
+app.use((req, res, next) => {
+    // Allow all origins
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Max-Age', '86400');
+
+    // Log CORS requests for debugging
+    if (req.method === 'OPTIONS') {
+        console.log('📡 OPTIONS request:', req.url);
+        return res.status(204).end();
+    }
+
+    next();
+});
+
+// 3. Third - Use cors package as backup
+app.use(cors({
+    origin: '*',
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
+    exposedHeaders: ['Content-Range', 'X-Content-Range'],
+    maxAge: 86400,
+    preflightContinue: false,
+    optionsSuccessStatus: 204
+}));
+
+// 4. Now add other middleware
 app.use(helmet({
     contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false,
@@ -29,78 +65,7 @@ app.use(helmet({
     crossOriginOpenerPolicy: false,
 }));
 
-// ============================================
-// CORS CONFIGURATION WITH YOUR URL
-// ============================================
-
-// Your frontend URLs
-const allowedOrigins = [
-    'https://golden-gates-7xw983mw8-cameronlewisscott136-devs-projects.vercel.app',
-    'https://golden-gates-1dqw.onrender.com',
-    'http://localhost:3000',
-    'http://localhost:5173',
-    'https://golden-gates-7xw983mw8-cameronlewisscott136-devs-projects.vercel.app',
-    process.env.FRONTEND_URL || '',
-    ...(process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean)
-].filter(Boolean);
-
-console.log('📋 Allowed CORS origins:', allowedOrigins);
-
-// CORS middleware
-app.use(cors({
-    origin: function (origin, callback) {
-        // Allow requests with no origin (like mobile apps or curl)
-        if (!origin) {
-            console.log('✅ No origin, allowing');
-            return callback(null, true);
-        }
-
-        console.log(`🔍 CORS request from: ${origin}`);
-
-        // Allow if origin is in allowed list or development
-        if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'development') {
-            console.log(`✅ CORS allowed: ${origin}`);
-            callback(null, true);
-        } else {
-            console.warn(`❌ CORS blocked: ${origin}`);
-            callback(new Error('Not allowed by CORS'));
-        }
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
-    exposedHeaders: ['Content-Range', 'X-Content-Range'],
-    maxAge: 86400,
-    preflightContinue: false,
-    optionsSuccessStatus: 204
-}));
-
-// Handle preflight requests
-app.options('*', cors());
-
-// Additional CORS middleware for all routes
-app.use((req, res, next) => {
-    const origin = req.headers.origin;
-
-    // Set CORS headers
-    if (origin && allowedOrigins.includes(origin)) {
-        res.header('Access-Control-Allow-Origin', origin);
-    } else if (process.env.NODE_ENV === 'development') {
-        res.header('Access-Control-Allow-Origin', '*');
-    }
-
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
-    res.header('Access-Control-Allow-Credentials', 'true');
-    res.header('Access-Control-Max-Age', '86400');
-
-    if (req.method === 'OPTIONS') {
-        console.log('📡 Preflight request handled:', req.url);
-        return res.status(204).end();
-    }
-
-    next();
-});
+app.use(compression());
 
 // Body parser
 app.use(express.json({ limit: '10mb' }));
@@ -118,14 +83,17 @@ const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 100,
     message: { success: false, message: 'Too many requests' },
-    validate: { trustProxy: false, xForwardedForHeader: false }
+    validate: { trustProxy: false, xForwardedForHeader: false },
+    // Skip rate limiting for OPTIONS requests
+    skip: (req) => req.method === 'OPTIONS',
 });
 
 const authLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
     max: 10,
     message: { success: false, message: 'Too many auth attempts' },
-    validate: { trustProxy: false, xForwardedForHeader: false }
+    validate: { trustProxy: false, xForwardedForHeader: false },
+    skip: (req) => req.method === 'OPTIONS',
 });
 
 app.use('/api', limiter);
@@ -140,16 +108,14 @@ app.use('/api/payments', paymentRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
-    const origin = req.headers.origin;
-    if (origin && allowedOrigins.includes(origin)) {
-        res.header('Access-Control-Allow-Origin', origin);
-    }
+    res.setHeader('Access-Control-Allow-Origin', '*');
     res.json({
         success: true,
         message: 'Golden Gates API is running',
         timestamp: new Date().toISOString(),
         environment: process.env.NODE_ENV,
-        allowedOrigins: allowedOrigins
+        cors: 'enabled',
+        headers: req.headers
     });
 });
 
@@ -157,6 +123,7 @@ app.get('/api/health', (req, res) => {
 app.use((err, req, res, next) => {
     console.error('Error:', err.message);
     const status = err.statusCode || 500;
+    res.setHeader('Access-Control-Allow-Origin', '*');
     res.status(status).json({
         success: false,
         message: err.message || 'Server error'
@@ -165,6 +132,7 @@ app.use((err, req, res, next) => {
 
 // 404 handler
 app.use((req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
     res.status(404).json({
         success: false,
         message: 'Route not found'
