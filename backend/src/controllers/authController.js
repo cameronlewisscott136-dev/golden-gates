@@ -4,6 +4,8 @@ const Referral = require('../models/Referral');
 const bcrypt = require('bcryptjs');
 const { generateToken } = require('../config/jwt');
 const { sendVerificationEmail } = require('../config/email');
+const Payment = require('../models/Payment');
+const payheroService = require('../utils/payhero');
 
 const generateCode = () => Math.floor(100000 + Math.random() * 900000).toString();
 
