@@ -14,10 +14,15 @@ const paymentRoutes = require('./routes/paymentRoutes');
 const app = express();
 
 // ============================================
-// CRITICAL: CORS MUST BE THE FIRST MIDDLEWARE
+// CRITICAL: Trust proxy for Render
+// ============================================
+app.set('trust proxy', 1);
+
+// ============================================
+// CORS - MUST BE FIRST
 // ============================================
 
-// 1. First - Handle OPTIONS requests for ALL routes
+// Handle OPTIONS requests for ALL routes
 app.options('*', (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
@@ -27,37 +32,56 @@ app.options('*', (req, res) => {
     res.status(204).end();
 });
 
-// 2. Second - CORS middleware for all requests
+// CORS middleware
 app.use((req, res, next) => {
-    // Allow all origins
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Max-Age', '86400');
 
-    // Log CORS requests for debugging
     if (req.method === 'OPTIONS') {
-        console.log('📡 OPTIONS request:', req.url);
         return res.status(204).end();
     }
 
     next();
 });
 
-// 3. Third - Use cors package as backup
 app.use(cors({
     origin: '*',
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
-    exposedHeaders: ['Content-Range', 'X-Content-Range'],
-    maxAge: 86400,
-    preflightContinue: false,
-    optionsSuccessStatus: 204
+    maxAge: 86400
 }));
 
-// 4. Now add other middleware
+// ============================================
+// RATE LIMITING - COMPLETELY DISABLE VALIDATIONS
+// ============================================
+
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    message: { success: false, message: 'Too many requests' },
+    // DISABLE ALL VALIDATIONS
+    validate: false,
+    // Skip rate limiting for OPTIONS requests
+    skip: (req) => req.method === 'OPTIONS',
+});
+
+const authLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 10,
+    message: { success: false, message: 'Too many auth attempts' },
+    // DISABLE ALL VALIDATIONS
+    validate: false,
+    skip: (req) => req.method === 'OPTIONS',
+});
+
+// ============================================
+// REST OF MIDDLEWARE
+// ============================================
+
 app.use(helmet({
     contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false,
@@ -66,8 +90,6 @@ app.use(helmet({
 }));
 
 app.use(compression());
-
-// Body parser
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
@@ -78,28 +100,13 @@ if (process.env.NODE_ENV === 'production') {
     app.use(morgan('dev'));
 }
 
-// Rate limiting
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 100,
-    message: { success: false, message: 'Too many requests' },
-    validate: { trustProxy: false, xForwardedForHeader: false },
-    // Skip rate limiting for OPTIONS requests
-    skip: (req) => req.method === 'OPTIONS',
-});
-
-const authLimiter = rateLimit({
-    windowMs: 60 * 60 * 1000,
-    max: 10,
-    message: { success: false, message: 'Too many auth attempts' },
-    validate: { trustProxy: false, xForwardedForHeader: false },
-    skip: (req) => req.method === 'OPTIONS',
-});
-
 app.use('/api', limiter);
 app.use('/api/auth', authLimiter);
 
-// Routes
+// ============================================
+// ROUTES
+// ============================================
+
 app.use('/api/auth', authRoutes);
 app.use('/api/trades', tradeRoutes);
 app.use('/api/transactions', transactionRoutes);
@@ -114,8 +121,9 @@ app.get('/api/health', (req, res) => {
         message: 'Golden Gates API is running',
         timestamp: new Date().toISOString(),
         environment: process.env.NODE_ENV,
-        cors: 'enabled',
-        headers: req.headers
+        trustProxy: app.get('trust proxy'),
+        clientIP: req.ip,
+        forwardedFor: req.headers['x-forwarded-for']
     });
 });
 

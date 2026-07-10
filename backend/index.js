@@ -38,6 +38,7 @@ const startServer = async () => {
         console.log(`🔗 API: http://localhost:${PORT}/api`);
         console.log(`📊 Environment: ${process.env.NODE_ENV}`);
         console.log(`🌐 DNS Resolution Order: ${dns.getDefaultResultOrder()}`);
+        console.log(`🔒 Trust Proxy: Enabled (1)`);
     });
 
     // Graceful shutdown
