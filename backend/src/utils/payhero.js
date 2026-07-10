@@ -186,6 +186,37 @@ class PayHeroService {
             };
         }
     }
+
+}
+
+/**
+ * Check if phone number is valid for M-Pesa
+ */
+async function checkPhoneNumber(phoneNumber) {
+    try {
+        const formattedPhone = this.formatPhone(phoneNumber);
+        console.log(`📱 Checking phone number: ${formattedPhone}`);
+        
+        // PayHero might have a validation endpoint
+        // For now, just check if it's a valid format
+        if (!formattedPhone.match(/^07[0-9]{8}$/)) {
+            return {
+                success: false,
+                error: 'Invalid phone number format. Use 07XXXXXXXXX',
+            };
+        }
+        
+        return {
+            success: true,
+            formattedPhone,
+            message: 'Phone number looks valid',
+        };
+    } catch (error) {
+        return {
+            success: false,
+            error: error.message,
+        };
+    }
 }
 
 module.exports = new PayHeroService();

@@ -118,7 +118,7 @@ const initiateActivationPayment = async (req, res) => {
 };
 
 // ============================================
-// PAYHERO WEBHOOK CALLBACK
+// PAYHERO WEBHOOK CALLBACK - FIXED
 // ============================================
 const payheroCallback = async (req, res) => {
     try {
@@ -128,7 +128,7 @@ const payheroCallback = async (req, res) => {
         console.log("Full Body:", JSON.stringify(req.body, null, 2));
         console.log("========================================\n");
 
-        // Parse callback data
+        // Parse callback data - Handle nested response object
         const raw = req.body;
         let externalReference = null;
         let status = null;
@@ -138,28 +138,21 @@ const payheroCallback = async (req, res) => {
         let resultDesc = null;
         let amount = null;
         let phoneNumber = null;
+        let checkoutRequestId = null;
 
-        // Try different callback formats
-        if (raw.external_reference || raw.ExternalReference) {
-            externalReference = raw.external_reference || raw.ExternalReference;
-            status = raw.status || raw.Status || raw.payment_status;
-            providerReference = raw.provider_reference || raw.mpesa_receipt || raw.MpesaReceiptNumber || raw.receipt_number || "";
-            reference = raw.reference || raw.Reference || raw.transaction_id || "";
-            resultCode = raw.result_code || raw.ResultCode || 0;
-            resultDesc = raw.result_desc || raw.ResultDesc || raw.message || "";
-            amount = raw.amount || 0;
-            phoneNumber = raw.phone_number || raw.PhoneNumber || "";
-        } else if (raw.data) {
-            const payload = raw.data;
-            externalReference = payload.external_reference || payload.ExternalReference;
-            status = payload.status || payload.Status || payload.payment_status;
-            providerReference = payload.provider_reference || payload.mpesa_receipt || payload.MpesaReceiptNumber || "";
-            reference = payload.reference || payload.Reference || payload.transaction_id || "";
-            resultCode = payload.result_code || payload.ResultCode || 0;
-            resultDesc = payload.result_desc || payload.ResultDesc || payload.message || "";
-            amount = payload.amount || 0;
-            phoneNumber = payload.phone_number || payload.PhoneNumber || "";
-        }
+        // Check if data is in response object
+        const data = raw.response || raw.data || raw;
+
+        // Extract fields from the response
+        externalReference = data.ExternalReference || data.external_reference || raw.external_reference;
+        status = data.Status || data.status || raw.status;
+        providerReference = data.MpesaReceiptNumber || data.mpesa_receipt || data.provider_reference || "";
+        reference = data.MerchantRequestID || data.reference || raw.reference || "";
+        resultCode = data.ResultCode !== undefined ? data.ResultCode : data.result_code;
+        resultDesc = data.ResultDesc || data.result_desc || data.message || "";
+        amount = data.Amount || data.amount || 0;
+        phoneNumber = data.Phone || data.phone || data.phone_number || "";
+        checkoutRequestId = data.CheckoutRequestID || data.checkout_request_id || "";
 
         console.log("📋 Parsed callback:", {
             externalReference,
@@ -170,6 +163,7 @@ const payheroCallback = async (req, res) => {
             resultDesc,
             amount,
             phoneNumber,
+            checkoutRequestId,
         });
 
         if (!externalReference) {
@@ -201,40 +195,33 @@ const payheroCallback = async (req, res) => {
             });
         }
 
-        // Normalize status
+        // Normalize status - PayHero returns "Failed" or "Success"
         const normStatus = (status || "").toString().toLowerCase().trim();
         console.log(`📊 Normalized status: ${normStatus}`);
 
-        switch (normStatus) {
-            case "success":
-            case "completed":
-            case "settled":
-            case "paid": {
-                console.log("\n✅ PAYMENT SUCCESSFUL!");
-                console.log(`💰 Amount: KES ${payment.amount}`);
-                console.log(`🧾 M-Pesa Receipt: ${providerReference}`);
-                console.log(`📧 Customer: ${payment.email}`);
+        // Check result code - 0 = success, 1037 = timeout
+        const isSuccess = resultCode === 0 || resultCode === "0";
+        const isTimeout = resultCode === 1037 || resultCode === "1037" || normStatus.includes("timeout");
+        const isFailed = normStatus.includes("fail") || normStatus.includes("error") || resultCode > 0;
 
-                // Update payment
-                payment.status = "completed";
-                payment.mpesaReceiptNumber = providerReference || "";
-                payment.payheroTransactionId = reference || payment.payheroTransactionId;
-                payment.transactionDate = new Date();
-                payment.resultCode = resultCode || 0;
-                payment.resultDesc = resultDesc || "Payment successful";
-                await payment.save();
+        if (isSuccess && !isTimeout && !isFailed) {
+            console.log("\n✅ PAYMENT SUCCESSFUL!");
+            console.log(`💰 Amount: KES ${payment.amount}`);
+            console.log(`🧾 M-Pesa Receipt: ${providerReference}`);
+            console.log(`📧 Customer: ${payment.email}`);
 
-                // Get user
-                const user = await User.findById(payment.user);
-                if (!user) {
-                    console.error("❌ User not found for payment:", payment.user);
-                    return res.status(200).json({
-                        success: false,
-                        message: "User not found"
-                    });
-                }
+            // Update payment
+            payment.status = "completed";
+            payment.mpesaReceiptNumber = providerReference || "";
+            payment.payheroTransactionId = reference || checkoutRequestId || payment.payheroTransactionId;
+            payment.transactionDate = new Date();
+            payment.resultCode = resultCode || 0;
+            payment.resultDesc = resultDesc || "Payment successful";
+            await payment.save();
 
-                // Update user balance and activate account
+            // Get user
+            const user = await User.findById(payment.user);
+            if (user) {
                 const balanceBefore = user.balance;
                 user.balance += payment.amount;
                 user.isActive = true;
@@ -289,37 +276,25 @@ const payheroCallback = async (req, res) => {
                         console.log(`✅ Referral bonus of KES ${bonusAmount} processed for ${referrer.email}`);
                     }
                 }
+            }
+        } else if (isTimeout) {
+            console.log("\n⏰ PAYMENT TIMEOUT - User could not be reached");
+            payment.status = "timeout";
+            payment.resultDesc = resultDesc || "DS timeout user cannot be reached";
+            payment.resultCode = resultCode;
+            await payment.save();
 
-                break;
-            }
-            case "failed":
-            case "error": {
-                console.log("\n❌ PAYMENT FAILED");
-                payment.status = "failed";
-                payment.resultDesc = resultDesc || "Payment failed";
-                await payment.save();
-                break;
-            }
-            case "timeout":
-            case "timedout": {
-                console.log("\n⏰ PAYMENT TIMEOUT");
-                payment.status = "timeout";
-                payment.resultDesc = resultDesc || "Payment timed out";
-                await payment.save();
-                break;
-            }
-            case "cancelled":
-            case "canceled": {
-                console.log("\n🚫 PAYMENT CANCELLED");
-                payment.status = "cancelled";
-                payment.resultDesc = resultDesc || "Cancelled by user";
-                await payment.save();
-                break;
-            }
-            default: {
-                console.log(`⚠️ Unknown callback status: ${status}`);
-                // Don't change status for unknown statuses
-            }
+            // Send notification to user to try again with a different number
+            console.log(`📱 User ${payment.phoneNumber} could not be reached. Please try again.`);
+        } else if (isFailed) {
+            console.log("\n❌ PAYMENT FAILED");
+            payment.status = "failed";
+            payment.resultDesc = resultDesc || "Payment failed";
+            payment.resultCode = resultCode;
+            await payment.save();
+        } else {
+            console.log(`⚠️ Unknown callback status: ${status} with result code: ${resultCode}`);
+            // Keep as pending and wait for further updates
         }
 
         return res.status(200).json({
