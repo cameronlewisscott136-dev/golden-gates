@@ -44,13 +44,14 @@ const generateSignature = (data) => {
     return signature;
 };
 
-// Initiate STK Push - Using the correct PayHero endpoint
+// Initiate STK Push - Using correct PayHero format
 const initiateSTKPush = async (phoneNumber, amount, externalReference, customerName) => {
     try {
         console.log(`💰 Initiating STK Push for ${phoneNumber} - KES ${amount}`);
 
         const formattedPhone = phoneNumber.replace(/^0+/, '254');
 
+        // Prepare payload according to PayHero API format
         const payload = {
             channelId: PAYHERO_CHANNEL_ID,
             phoneNumber: formattedPhone,
@@ -58,7 +59,7 @@ const initiateSTKPush = async (phoneNumber, amount, externalReference, customerN
             externalReference: externalReference,
             customerName: customerName || 'Customer',
             description: 'Account Activation - Golden Gates',
-            callbackUrl: process.env.PAYHERO_CALLBACK_URL,
+            callbackUrl: process.env.PAYHERO_CALLBACK_URL || 'https://golden-gates-oegh.onrender.com/api/payments/callback',
         };
 
         console.log('📋 Payload:', JSON.stringify(payload, null, 2));
@@ -66,16 +67,17 @@ const initiateSTKPush = async (phoneNumber, amount, externalReference, customerN
         // Generate signature
         const signature = generateSignature(payload);
 
-        // Try different endpoint formats
+        // Try different endpoint formats - Based on common PayHero API patterns
         const endpoints = [
-            '/api/v1/payments/stkpush',
             '/api/v1/stkpush',
-            '/v1/payments/stkpush',
-            '/payment/stkpush',
+            '/v1/stkpush',
             '/stkpush',
+            '/api/stkpush',
+            '/payment/stkpush',
         ];
 
         let lastError = null;
+        let successResponse = null;
 
         // Try each endpoint
         for (const endpoint of endpoints) {
@@ -98,19 +100,24 @@ const initiateSTKPush = async (phoneNumber, amount, externalReference, customerN
                 );
 
                 console.log('✅ PayHero STK Push initiated successfully');
-                console.log('📋 Response:', response.data);
+                console.log('📋 Response:', JSON.stringify(response.data, null, 2));
 
-                return {
+                successResponse = {
                     success: true,
-                    payheroReference: response.data.reference || response.data.Reference || response.data.transactionId || response.data.id,
+                    payheroReference: response.data.reference || response.data.Reference || response.data.transactionId || response.data.id || response.data.transactionReference,
                     formattedPhone: formattedPhone,
                     data: response.data,
                 };
+                break;
             } catch (error) {
-                console.log(`❌ Endpoint ${endpoint} failed:`, error.response?.status || error.message);
+                console.log(`❌ Endpoint ${endpoint} failed:`, error.response?.status, error.response?.data || error.message);
                 lastError = error;
                 // Continue to next endpoint
             }
+        }
+
+        if (successResponse) {
+            return successResponse;
         }
 
         // If we get here, all endpoints failed
@@ -140,10 +147,10 @@ const checkTransactionStatus = async (externalReference) => {
         const signature = generateSignature(payload);
 
         const endpoints = [
-            `/api/v1/payments/status`,
             `/api/v1/status`,
-            `/v1/payments/status`,
-            `/payment/status`,
+            `/v1/status`,
+            `/status`,
+            `/api/status`,
         ];
 
         let lastError = null;
@@ -201,8 +208,39 @@ const verifyWebhookSignature = (payload, signature) => {
     }
 };
 
+// Test endpoint connectivity
+const testConnection = async () => {
+    console.log('🔍 Testing PayHero API connectivity...');
+
+    const testEndpoints = [
+        '/api/v1/stkpush',
+        '/v1/stkpush',
+        '/stkpush',
+    ];
+
+    for (const endpoint of testEndpoints) {
+        try {
+            const url = `${PAYHERO_BASE_URL}${endpoint}`;
+            console.log(`Testing: ${url}`);
+            // Just test if endpoint exists
+            await axios.options(url, {
+                headers: {
+                    'Authorization': getAuthHeader(),
+                },
+                timeout: 5000,
+            });
+            console.log(`✅ Working: ${endpoint}`);
+            return true;
+        } catch (error) {
+            console.log(`❌ Failed: ${endpoint} - ${error.message}`);
+        }
+    }
+    return false;
+};
+
 module.exports = {
     initiateSTKPush,
     checkTransactionStatus,
     verifyWebhookSignature,
+    testConnection,
 };
