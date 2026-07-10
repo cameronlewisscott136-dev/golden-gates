@@ -9,11 +9,14 @@ const { sendVerificationEmail } = require('../config/email');
 
 const generateCode = () => Math.floor(100000 + Math.random() * 900000).toString();
 
-// @desc    Register user
-exports.register = async (req, res) => {
+// ============================================
+// REGISTER USER
+// ============================================
+const register = async (req, res) => {
     try {
         const { email, phone, password, firstName, lastName, referralCode } = req.body;
 
+        // Check if user exists
         const existing = await User.findOne({ $or: [{ email }, { phone }] });
         if (existing) {
             return res.status(400).json({
@@ -22,9 +25,11 @@ exports.register = async (req, res) => {
             });
         }
 
+        // Hash password
         const hashedPassword = await bcrypt.hash(password, 12);
         const verificationCode = generateCode();
 
+        // Create user
         const user = new User({
             email,
             phone,
@@ -35,8 +40,10 @@ exports.register = async (req, res) => {
             verificationCodeExpiry: new Date(Date.now() + 10 * 60 * 1000)
         });
 
+        // Generate referral code
         user.referralCode = user.generateReferralCode();
 
+        // Handle referral
         if (referralCode) {
             const referrer = await User.findOne({ referralCode });
             if (referrer) {
@@ -46,6 +53,7 @@ exports.register = async (req, res) => {
 
         await user.save();
 
+        // Create referral record
         if (user.referredBy) {
             await Referral.create({
                 referrer: user.referredBy,
@@ -54,6 +62,7 @@ exports.register = async (req, res) => {
             });
         }
 
+        // Send verification email
         try {
             await sendVerificationEmail(email, verificationCode);
             console.log('📧 Verification email sent to:', email);
@@ -91,8 +100,10 @@ exports.register = async (req, res) => {
     }
 };
 
-// @desc    Login user
-exports.login = async (req, res) => {
+// ============================================
+// LOGIN USER
+// ============================================
+const login = async (req, res) => {
     try {
         const { email, password } = req.body;
 
@@ -134,8 +145,10 @@ exports.login = async (req, res) => {
     }
 };
 
-// @desc    Verify email
-exports.verifyEmail = async (req, res) => {
+// ============================================
+// VERIFY EMAIL
+// ============================================
+const verifyEmail = async (req, res) => {
     try {
         const { code } = req.body;
         const user = await User.findById(req.user._id).select('+verificationCode +verificationCodeExpiry');
@@ -178,8 +191,10 @@ exports.verifyEmail = async (req, res) => {
     }
 };
 
-// @desc    Resend verification code
-exports.resendVerification = async (req, res) => {
+// ============================================
+// RESEND VERIFICATION CODE
+// ============================================
+const resendVerification = async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('+verificationCode +verificationCodeExpiry');
 
@@ -211,10 +226,133 @@ exports.resendVerification = async (req, res) => {
     }
 };
 
-// @desc    Get current user
-exports.getMe = async (req, res) => {
+// ============================================
+// ACTIVATE ACCOUNT (PayHero Integration)
+// ============================================
+const activateAccount = async (req, res) => {
+    try {
+        const { phoneNumber, amount } = req.body;
+        const user = await User.findById(req.user._id);
+
+        console.log("\n========================================");
+        console.log("🚀 ACCOUNT ACTIVATION REQUEST");
+        console.log("========================================");
+        console.log(`👤 User: ${user.email}`);
+        console.log(`📱 Phone: ${phoneNumber}`);
+        console.log(`💰 Amount: KES ${amount}`);
+        console.log("========================================\n");
+
+        // Validation
+        if (!phoneNumber || !amount) {
+            return res.status(400).json({
+                success: false,
+                message: "Phone number and amount are required",
+            });
+        }
+
+        if (user.isActive) {
+            return res.status(400).json({
+                success: false,
+                message: "Account already activated",
+            });
+        }
+
+        if (!user.isVerified) {
+            return res.status(400).json({
+                success: false,
+                message: "Please verify your email first",
+            });
+        }
+
+        const requiredAmount = parseInt(process.env.CAPITAL_REQUIRED) || 200;
+        const depositAmount = parseFloat(amount);
+
+        if (!depositAmount || depositAmount < requiredAmount) {
+            return res.status(400).json({
+                success: false,
+                message: `Minimum deposit for activation is KES ${requiredAmount}`,
+            });
+        }
+
+        // Generate references
+        const timestamp = Date.now();
+        const orderId = `ACT${timestamp}`;
+        const externalReference = `ACT${timestamp}`;
+
+        // Initiate PayHero STK Push
+        const result = await payheroService.initiateSTKPush(
+            phoneNumber,
+            depositAmount,
+            externalReference,
+            `${user.firstName} ${user.lastName}`
+        );
+
+        if (!result.success) {
+            console.error("❌ PayHero error:", result.error);
+            return res.status(500).json({
+                success: false,
+                message: result.error || "Failed to initiate payment. Please try again.",
+            });
+        }
+
+        // Create payment record
+        const payment = new Payment({
+            user: user._id,
+            orderId,
+            externalReference,
+            phoneNumber: result.formattedPhone,
+            email: user.email,
+            amount: Math.round(depositAmount),
+            customerName: `${user.firstName} ${user.lastName}`,
+            description: "Account Activation - Golden Gates",
+            status: "pending",
+            payheroTransactionId: result.payheroReference || "",
+            paymentChannel: "mpesa",
+            isActivation: true,
+        });
+
+        await payment.save();
+
+        console.log("✅ Payment record saved");
+        console.log(`📋 Order ID: ${orderId}`);
+        console.log(`📱 External Ref: ${externalReference}`);
+        console.log("========================================\n");
+
+        return res.json({
+            success: true,
+            message: "STK Push sent. Check your phone for the M-Pesa prompt.",
+            data: {
+                orderId,
+                externalReference,
+                phoneNumber: result.formattedPhone,
+                amount: depositAmount,
+                paymentId: payment._id,
+                status: 'pending',
+            },
+        });
+    } catch (error) {
+        console.error("❌ Activation error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message || "Failed to initiate activation",
+        });
+    }
+};
+
+// ============================================
+// GET CURRENT USER
+// ============================================
+const getMe = async (req, res) => {
     try {
         const user = await User.findById(req.user._id);
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
         res.json({
             success: true,
             data: {
@@ -232,20 +370,33 @@ exports.getMe = async (req, res) => {
                     totalReferrals: user.totalReferrals,
                     totalTrades: user.totalTrades,
                     totalProfit: user.totalProfit,
-                    totalLoss: user.totalLoss
+                    totalLoss: user.totalLoss,
+                    createdAt: user.createdAt
                 }
             }
         });
     } catch (error) {
         console.error('Get me error:', error.message);
-        res.status(500).json({ success: false, message: 'Server error' });
+        res.status(500).json({
+            success: false,
+            message: 'Server error'
+        });
     }
 };
 
-// @desc    Check activation status
-exports.checkActivationStatus = async (req, res) => {
+// ============================================
+// CHECK ACTIVATION STATUS
+// ============================================
+const checkActivationStatus = async (req, res) => {
     try {
         const user = await User.findById(req.user._id);
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
 
         res.json({
             success: true,
@@ -262,4 +413,153 @@ exports.checkActivationStatus = async (req, res) => {
             message: 'Server error'
         });
     }
+};
+
+// ============================================
+// UPDATE PROFILE
+// ============================================
+const updateProfile = async (req, res) => {
+    try {
+        const { firstName, lastName, phone } = req.body;
+        const user = await User.findById(req.user._id);
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        if (firstName) user.firstName = firstName;
+        if (lastName) user.lastName = lastName;
+        if (phone) user.phone = phone;
+
+        await user.save();
+
+        res.json({
+            success: true,
+            message: 'Profile updated successfully',
+            data: {
+                user: {
+                    id: user._id,
+                    email: user.email,
+                    phone: user.phone,
+                    firstName: user.firstName,
+                    lastName: user.lastName,
+                    isVerified: user.isVerified,
+                    isActive: user.isActive,
+                    balance: user.balance,
+                    referralCode: user.referralCode
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Update profile error:', error.message);
+        res.status(500).json({
+            success: false,
+            message: 'Server error updating profile'
+        });
+    }
+};
+
+// ============================================
+// CHANGE PASSWORD
+// ============================================
+const changePassword = async (req, res) => {
+    try {
+        const { currentPassword, newPassword } = req.body;
+        const user = await User.findById(req.user._id).select('+password');
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        // Verify current password
+        const isValid = await user.comparePassword(currentPassword);
+        if (!isValid) {
+            return res.status(401).json({
+                success: false,
+                message: 'Current password is incorrect'
+            });
+        }
+
+        // Hash new password
+        user.password = await bcrypt.hash(newPassword, 12);
+        await user.save();
+
+        res.json({
+            success: true,
+            message: 'Password changed successfully'
+        });
+    } catch (error) {
+        console.error('Change password error:', error.message);
+        res.status(500).json({
+            success: false,
+            message: 'Server error changing password'
+        });
+    }
+};
+
+// ============================================
+// GET USER BY ID (Admin)
+// ============================================
+const getUserById = async (req, res) => {
+    try {
+        const user = await User.findById(req.params.id);
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            data: {
+                user: {
+                    id: user._id,
+                    email: user.email,
+                    phone: user.phone,
+                    firstName: user.firstName,
+                    lastName: user.lastName,
+                    isVerified: user.isVerified,
+                    isActive: user.isActive,
+                    balance: user.balance,
+                    referralCode: user.referralCode,
+                    referralEarnings: user.referralEarnings,
+                    totalReferrals: user.totalReferrals,
+                    totalTrades: user.totalTrades,
+                    totalProfit: user.totalProfit,
+                    totalLoss: user.totalLoss,
+                    createdAt: user.createdAt
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Get user error:', error.message);
+        res.status(500).json({
+            success: false,
+            message: 'Server error'
+        });
+    }
+};
+
+// ============================================
+// EXPORT ALL CONTROLLER FUNCTIONS
+// ============================================
+module.exports = {
+    register,
+    login,
+    verifyEmail,
+    resendVerification,
+    activateAccount,
+    getMe,
+    checkActivationStatus,
+    updateProfile,
+    changePassword,
+    getUserById,
 };
