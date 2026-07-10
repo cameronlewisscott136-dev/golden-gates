@@ -1,44 +1,18 @@
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 
-// Create transporter with optimized settings
-const createTransporter = () => {
-    return nodemailer.createTransport({
-        host: 'smtp.gmail.com',
-        port: 465, // Using port 465 with SSL (more reliable)
-        secure: true, // true for port 465
-        auth: {
-            user: process.env.EMAIL_USER,
-            pass: process.env.EMAIL_PASS,
-        },
-        // Force IPv4
-        family: 4,
-        // Timeout settings
-        connectionTimeout: 30000,
-        greetingTimeout: 30000,
-        socketTimeout: 30000,
-        // TLS settings
-        tls: {
-            rejectUnauthorized: false,
-        },
-    });
-};
+// Initialize Resend with API key
+const resend = new Resend(process.env.RESEND_API_KEY);
 
-// Send verification email
+// Send verification email via Resend
 const sendVerificationEmail = async (email, code) => {
-    try {
-        console.log(`📧 Sending verification email to ${email}`);
-
-        const transporter = createTransporter();
-
-        // Verify connection
-        await transporter.verify();
-        console.log('✅ SMTP connection verified');
-
-        const mailOptions = {
-            from: process.env.EMAIL_FROM || 'noreply@goldengates.com',
-            to: email,
-            subject: '🔐 Golden Gates - Email Verification',
-            html: `
+  try {
+    console.log(`📧 Sending verification email via Resend to ${email}`);
+    
+    const { data, error } = await resend.emails.send({
+      from: process.env.EMAIL_FROM || 'onboarding@resend.dev',
+      to: [email],
+      subject: '🔐 Golden Gates - Email Verification',
+      html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
           <div style="background: linear-gradient(135deg, #facc15, #eab308); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
             <h1 style="color: #1a1a1a; margin: 0;">✨ Golden Gates</h1>
@@ -55,7 +29,7 @@ const sendVerificationEmail = async (email, code) => {
           </div>
         </div>
       `,
-            text: `
+      text: `
         Golden Gates Trading Platform
         ---------------------------
         
@@ -69,28 +43,32 @@ const sendVerificationEmail = async (email, code) => {
         
         © 2024 Golden Gates Trading Platform
       `
-        };
+    });
 
-        const info = await transporter.sendMail(mailOptions);
-        console.log('✅ Email sent successfully:', info.messageId);
-        return info;
-
-    } catch (error) {
-        console.error('❌ Email error:', error.message);
-        throw new Error(`Failed to send verification email: ${error.message}`);
+    if (error) {
+      console.error('❌ Resend error:', error);
+      throw new Error(`Failed to send email: ${error.message}`);
     }
+
+    console.log('✅ Email sent via Resend:', data);
+    return data;
+    
+  } catch (error) {
+    console.error('❌ Email error:', error.message);
+    throw new Error(`Failed to send verification email: ${error.message}`);
+  }
 };
 
-// Send welcome email
+// Send welcome email via Resend
 const sendWelcomeEmail = async (email, firstName) => {
-    try {
-        const transporter = createTransporter();
-
-        const mailOptions = {
-            from: process.env.EMAIL_FROM || 'noreply@goldengates.com',
-            to: email,
-            subject: '🎉 Welcome to Golden Gates!',
-            html: `
+  try {
+    console.log(`📧 Sending welcome email via Resend to ${email}`);
+    
+    const { data, error } = await resend.emails.send({
+      from: process.env.EMAIL_FROM || 'onboarding@resend.dev',
+      to: [email],
+      subject: '🎉 Welcome to Golden Gates!',
+      html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
           <div style="background: linear-gradient(135deg, #facc15, #eab308); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
             <h1 style="color: #1a1a1a; margin: 0;">🌟 Golden Gates</h1>
@@ -112,7 +90,7 @@ const sendWelcomeEmail = async (email, firstName) => {
           </div>
         </div>
       `,
-            text: `
+      text: `
         Welcome to Golden Gates, ${firstName}!
         
         Your account has been successfully activated. You're now ready to start your trading journey!
@@ -126,19 +104,23 @@ const sendWelcomeEmail = async (email, firstName) => {
         
         © 2024 Golden Gates Trading Platform
       `
-        };
+    });
 
-        const info = await transporter.sendMail(mailOptions);
-        console.log('✅ Welcome email sent:', info.messageId);
-        return info;
-
-    } catch (error) {
-        console.error('❌ Welcome email error:', error.message);
-        return null;
+    if (error) {
+      console.error('❌ Resend welcome error:', error);
+      return null;
     }
+
+    console.log('✅ Welcome email sent via Resend:', data);
+    return data;
+    
+  } catch (error) {
+    console.error('❌ Welcome email error:', error.message);
+    return null;
+  }
 };
 
-module.exports = {
-    sendVerificationEmail,
-    sendWelcomeEmail
+module.exports = { 
+  sendVerificationEmail,
+  sendWelcomeEmail
 };
