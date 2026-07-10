@@ -27,15 +27,59 @@ app.use(helmet({
     crossOriginEmbedderPolicy: false,
 }));
 
-// CORS
+// ============================================
+// COMPLETE CORS CONFIGURATION - ALLOW ALL
+// ============================================
 app.use(cors({
-    origin: process.env.NODE_ENV === 'production'
-        ? (process.env.ALLOWED_ORIGINS || '').split(',')
-        : '*',
+    origin: '*', // Allow all origins
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'],
+    allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+        'X-Requested-With',
+        'Accept',
+        'Origin',
+        'Access-Control-Allow-Origin',
+        'Access-Control-Allow-Headers',
+        'Access-Control-Allow-Methods',
+        'X-Forwarded-For',
+        'X-Real-IP'
+    ],
+    exposedHeaders: ['Content-Range', 'X-Content-Range'],
+    maxAge: 86400, // 24 hours
+    preflightContinue: false,
+    optionsSuccessStatus: 204
 }));
+
+// ============================================
+// ALTERNATIVE: Specific Origins (More Secure)
+// ============================================
+// const allowedOrigins = [
+//   'https://golden-gates-7xw983mw8-cameronlewisscott136-devs-projects.vercel.app',
+//   'https://golden-gates-1dqw.onrender.com',
+//   'http://localhost:3000',
+//   'http://localhost:5173',
+//   process.env.FRONTEND_URL || '',
+//   ...(process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean)
+// ].filter(Boolean);
+
+// app.use(cors({
+//   origin: function (origin, callback) {
+//     if (!origin) return callback(null, true);
+//     if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'development') {
+//       callback(null, true);
+//     } else {
+//       console.warn('CORS blocked request from:', origin);
+//       callback(new Error('Not allowed by CORS'));
+//     }
+//   },
+//   credentials: true,
+//   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+//   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+//   exposedHeaders: ['Content-Range', 'X-Content-Range'],
+//   maxAge: 86400
+// }));
 
 // Body parser
 app.use(express.json({ limit: '10mb' }));
@@ -73,15 +117,22 @@ app.use('/api/transactions', transactionRoutes);
 app.use('/api/referrals', referralRoutes);
 app.use('/api/payments', paymentRoutes);
 
-// Health check
+// Health check with CORS headers
 app.get('/api/health', (req, res) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     res.json({
         success: true,
         message: 'Golden Gates API is running',
         timestamp: new Date().toISOString(),
-        environment: process.env.NODE_ENV
+        environment: process.env.NODE_ENV,
+        cors: 'enabled for all origins'
     });
 });
+
+// Handle preflight requests for all routes
+app.options('*', cors());
 
 // Error handler
 app.use((err, req, res, next) => {
