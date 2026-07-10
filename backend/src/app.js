@@ -1,3 +1,4 @@
+// src/app.js - Simplest working version
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -13,15 +14,7 @@ const paymentRoutes = require('./routes/paymentRoutes');
 
 const app = express();
 
-// Trust proxy for production
-if (process.env.NODE_ENV === 'production') {
-    app.set('trust proxy', 1);
-}
-
-// Compression
-app.use(compression());
-
-// Security headers (relaxed for CORS)
+// Disable all security for development (for testing)
 app.use(helmet({
     contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false,
@@ -30,81 +23,51 @@ app.use(helmet({
 }));
 
 // ============================================
-// CORS - COMPLETE CONFIGURATION
+// ULTRA SIMPLE CORS - WORKS EVERYWHERE
 // ============================================
+// This is the most permissive CORS configuration
+// It allows any origin, any method, any header
+app.use((req, res, next) => {
+    // Allow all origins
+    res.setHeader('Access-Control-Allow-Origin', '*');
 
-// Option 1: Allow all origins (Simplest, works everywhere)
+    // Allow all methods
+    res.setHeader('Access-Control-Allow-Methods', '*');
+
+    // Allow all headers
+    res.setHeader('Access-Control-Allow-Headers', '*');
+
+    // Allow credentials
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+
+    // Handle preflight requests
+    if (req.method === 'OPTIONS') {
+        res.setHeader('Access-Control-Max-Age', '86400');
+        return res.status(204).end();
+    }
+
+    next();
+});
+
+// Or use the cors package with all options
 app.use(cors({
     origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'],
-    allowedHeaders: ['*'],
-    exposedHeaders: ['*'],
+    methods: '*',
+    allowedHeaders: '*',
+    exposedHeaders: '*',
     credentials: true,
     maxAge: 86400,
     preflightContinue: false,
     optionsSuccessStatus: 204
 }));
 
-// Handle preflight requests explicitly
-app.options('*', cors());
-
-// ============================================
-// OR Option 2: Dynamic CORS with logging
-// ============================================
-// const allowedOrigins = [
-//   'https://golden-gates-7xw983mw8-cameronlewisscott136-devs-projects.vercel.app',
-//   'https://golden-gates-1dqw.onrender.com',
-//   'http://localhost:3000',
-//   'http://localhost:5173',
-//   process.env.FRONTEND_URL || '',
-//   ...(process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean)
-// ].filter(Boolean);
-
-// app.use(cors({
-//   origin: function (origin, callback) {
-//     // Allow requests with no origin (like mobile apps or curl)
-//     if (!origin) {
-//       console.log('✅ No origin, allowing');
-//       return callback(null, true);
-//     }
-
-//     console.log(`🔍 CORS request from: ${origin}`);
-
-//     // Check if origin is allowed
-//     if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'development') {
-//       console.log(`✅ CORS allowed: ${origin}`);
-//       callback(null, true);
-//     } else {
-//       console.warn(`❌ CORS blocked: ${origin}`);
-//       console.warn(`📋 Allowed origins: ${allowedOrigins.join(', ')}`);
-//       callback(new Error('Not allowed by CORS'));
-//     }
-//   },
-//   credentials: true,
-//   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'],
-//   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
-//   exposedHeaders: ['Content-Range', 'X-Content-Range'],
-//   maxAge: 86400
-// }));
-
-// ============================================
-// Additional CORS middleware for all routes
-// ============================================
-app.use((req, res, next) => {
-    // Set CORS headers for all responses
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, X-Forwarded-For');
-    res.header('Access-Control-Allow-Credentials', 'true');
-    res.header('Access-Control-Expose-Headers', 'Content-Length, X-Kuma-Revision');
-
-    // Handle preflight requests
-    if (req.method === 'OPTIONS') {
-        console.log('📡 Preflight request handled:', req.url);
-        return res.status(204).end();
-    }
-
-    next();
+// Handle OPTIONS for all routes
+app.options('*', (req, res) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', '*');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    res.setHeader('Access-Control-Max-Age', '86400');
+    res.status(204).end();
 });
 
 // Body parser
@@ -112,13 +75,9 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Logging
-if (process.env.NODE_ENV === 'production') {
-    app.use(morgan('combined'));
-} else {
-    app.use(morgan('dev'));
-}
+app.use(morgan('dev'));
 
-// Rate limiting (disabled validation for proxies)
+// Rate limiting
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 100,
@@ -126,15 +85,7 @@ const limiter = rateLimit({
     validate: { trustProxy: false, xForwardedForHeader: false }
 });
 
-const authLimiter = rateLimit({
-    windowMs: 60 * 60 * 1000,
-    max: 10,
-    message: { success: false, message: 'Too many auth attempts' },
-    validate: { trustProxy: false, xForwardedForHeader: false }
-});
-
 app.use('/api', limiter);
-app.use('/api/auth', authLimiter);
 
 // Routes
 app.use('/api/auth', authRoutes);
@@ -143,17 +94,13 @@ app.use('/api/transactions', transactionRoutes);
 app.use('/api/referrals', referralRoutes);
 app.use('/api/payments', paymentRoutes);
 
-// Health check with explicit CORS headers
+// Health check
 app.get('/api/health', (req, res) => {
-    res.header('Access-Control-Allow-Origin', '*');
-    res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     res.json({
         success: true,
         message: 'Golden Gates API is running',
         timestamp: new Date().toISOString(),
-        environment: process.env.NODE_ENV,
-        cors: 'enabled for all origins'
+        environment: process.env.NODE_ENV || 'development'
     });
 });
 
