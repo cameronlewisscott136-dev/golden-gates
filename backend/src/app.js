@@ -18,16 +18,69 @@ if (process.env.NODE_ENV === 'production') {
     app.set('trust proxy', 1);
 }
 
-// CORS
+// ============================================
+// CORS CONFIGURATION - FIXED
+// ============================================
+const allowedOrigins = [
+    'https://golden-gates-kappa.vercel.app',
+    'https://golden-gates-oegh.onrender.com',
+    'http://localhost:3000',
+    'http://localhost:5173',
+    process.env.FRONTEND_URL || '',
+    ...(process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean)
+].filter(Boolean);
+
+console.log('📋 Allowed CORS origins:', allowedOrigins);
+
+// CORS middleware with specific origins
 app.use(cors({
-    origin: '*',
-    credentials: true,
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps or curl)
+        if (!origin) {
+            return callback(null, true);
+        }
+
+        // Allow if origin is in allowed list or development
+        if (allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
+            callback(null, true);
+        } else {
+            console.warn('❌ CORS blocked:', origin);
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    credentials: true, // Required for cookies/auth headers
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
-    maxAge: 86400
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+    exposedHeaders: ['Content-Range', 'X-Content-Range'],
+    maxAge: 86400,
+    preflightContinue: false,
+    optionsSuccessStatus: 204
 }));
 
-app.options('*', cors());
+// Handle OPTIONS requests explicitly
+app.options('*', (req, res) => {
+    const origin = req.headers.origin;
+    if (allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
+        res.setHeader('Access-Control-Allow-Origin', origin || '*');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+        res.setHeader('Access-Control-Max-Age', '86400');
+        res.status(204).end();
+    } else {
+        res.status(204).end();
+    }
+});
+
+// Additional CORS headers for all responses
+app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
+    next();
+});
 
 app.use(helmet({
     contentSecurityPolicy: false,
@@ -72,12 +125,17 @@ app.use('/api/withdrawals', withdrawalRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    const origin = req.headers.origin;
+    if (allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
     res.json({
         success: true,
         message: 'Golden Gates API is running',
         timestamp: new Date().toISOString(),
         environment: process.env.NODE_ENV,
+        allowedOrigins: allowedOrigins
     });
 });
 
@@ -85,7 +143,11 @@ app.get('/api/health', (req, res) => {
 app.use((err, req, res, next) => {
     console.error('Error:', err.message);
     const status = err.statusCode || 500;
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    const origin = req.headers.origin;
+    if (allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
     res.status(status).json({
         success: false,
         message: err.message || 'Server error'
@@ -94,7 +156,11 @@ app.use((err, req, res, next) => {
 
 // 404 handler
 app.use((req, res) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
+    const origin = req.headers.origin;
+    if (allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
     res.status(404).json({
         success: false,
         message: 'Route not found'
