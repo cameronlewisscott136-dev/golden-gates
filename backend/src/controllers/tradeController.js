@@ -84,6 +84,7 @@ const createTrade = async (req, res) => {
         });
 
         console.log(`📊 Trade opened: ${type.toUpperCase()} ${quantity.toFixed(4)} ${asset} | KES ${amount}`);
+        console.log(`💰 Balance after open: KES ${user.balance.toFixed(2)}`);
 
         // Auto close after random delay (10-40 seconds)
         const closeDelay = Math.floor(Math.random() * 30000) + 10000;
@@ -112,7 +113,7 @@ const createTrade = async (req, res) => {
 };
 
 // ============================================
-// AUTO CLOSE TRADE
+// AUTO CLOSE TRADE - FIXED BALANCE UPDATE
 // ============================================
 const autoCloseTrade = async (tradeId) => {
     try {
@@ -156,7 +157,9 @@ const autoCloseTrade = async (tradeId) => {
         trade.duration = Math.floor((trade.closeTime - trade.openTime) / 1000);
         await trade.save();
 
-        // Update user balance
+        // ============================================
+        // FIXED: Update user balance correctly
+        // ============================================
         const user = await User.findById(trade.user);
         if (!user) {
             console.error(`❌ User not found for trade: ${tradeId}`);
@@ -164,15 +167,24 @@ const autoCloseTrade = async (tradeId) => {
         }
 
         const balanceBefore = user.balance;
-        const totalReturn = trade.amount + profitLoss;
-        user.balance += profitLoss; // Add only the profit/loss (amount was already deducted)
 
+        // The user gets back the original amount + profit/loss
+        // Since the original amount was deducted when the trade opened,
+        // we add the total return (amount + profitLoss) back to the balance
+        const totalReturn = trade.amount + profitLoss;
+        user.balance += totalReturn; // Add the full amount back
+
+        // Update profit/loss stats
         if (profitLoss >= 0) {
             user.totalProfit += profitLoss;
         } else {
             user.totalLoss += Math.abs(profitLoss);
         }
         await user.save();
+
+        console.log(`💰 Balance before: KES ${balanceBefore.toFixed(2)}`);
+        console.log(`💰 Total return: KES ${totalReturn.toFixed(2)} (${profitLoss >= 0 ? '+' : ''}${profitLoss.toFixed(2)})`);
+        console.log(`💰 New balance: KES ${user.balance.toFixed(2)}`);
 
         // Record transaction
         await Transaction.create({
@@ -190,8 +202,8 @@ const autoCloseTrade = async (tradeId) => {
             }
         });
 
-        console.log(`✅ Trade closed: ${trade.asset} ${trade.type} | P/L: ${profitLoss >= 0 ? '+' : ''}${profitLoss.toFixed(2)} KES (${trade.profitPercentage.toFixed(2)}%)`);
-        console.log(`💰 New balance: KES ${user.balance.toFixed(2)}`);
+        console.log(`✅ Trade closed: ${trade.asset} ${trade.type} | P/L: ${profitLoss >= 0 ? '+' : ''}${profitLoss.toFixed(2)} KES`);
+        console.log(`✅ New balance: KES ${user.balance.toFixed(2)}`);
 
     } catch (error) {
         console.error('❌ Auto-close trade error:', error.message);
