@@ -51,56 +51,72 @@ const payheroCallback = async (req, res) => {
 
             const user = await User.findById(payment.user);
             if (user) {
-                const balanceBefore = user.balance;
-                user.balance += payment.amount;
-                user.totalDeposited = (user.totalDeposited || 0) + payment.amount;
-
                 if (payment.isActivation) {
+                    // === ACTIVATION: Set initial capital ===
+                    user.initialCapital = payment.amount;  // 200 KES locked
                     user.isActive = true;
-                    console.log('✅ Account activated for:', user.email);
+                    console.log(`✅ Account activated with initial capital: KES ${user.initialCapital}`);
+
+                    // Process referral bonus for referrer
+                    if (user.referredBy) {
+                        const referrer = await User.findById(user.referredBy);
+                        if (referrer) {
+                            const bonusAmount = parseInt(process.env.REFERRAL_BONUS) || 200; // Now 200 KES
+
+                            // Add bonus to referrer's bonus balance
+                            referrer.bonusBalance += bonusAmount;
+                            referrer.referralEarnings += bonusAmount;
+                            referrer.totalReferrals += 1;
+                            await referrer.save();
+
+                            // Update referral record
+                            await Referral.findOneAndUpdate(
+                                { referrer: referrer._id, referredUser: user._id },
+                                {
+                                    status: 'active',
+                                    bonusEarned: bonusAmount,
+                                    bonusPaid: true,
+                                    activatedAt: new Date()
+                                }
+                            );
+
+                            // Create transaction for referral bonus
+                            await Transaction.create({
+                                user: referrer._id,
+                                type: 'referral_bonus',
+                                amount: bonusAmount,
+                                balanceBefore: referrer.totalBalance,
+                                balanceAfter: referrer.totalBalance + bonusAmount,
+                                description: `Referral bonus for ${user.email} - KES ${bonusAmount}`,
+                                status: 'completed',
+                                metadata: { referredUser: user._id }
+                            });
+
+                            console.log(`✅ Referral bonus of KES ${bonusAmount} added to ${referrer.email}'s bonus balance`);
+                        }
+                    }
+                } else if (payment.isDeposit) {
+                    // === DEPOSIT: Add to profit balance (can be used for trading) ===
+                    user.profitBalance += payment.amount;
+                    user.totalDeposited = (user.totalDeposited || 0) + payment.amount;
+                    console.log(`✅ Deposit of KES ${payment.amount} added to profit balance`);
                 }
 
                 await user.save();
 
+                // Create transaction record
                 await Transaction.create({
                     user: user._id,
                     type: payment.isActivation ? 'capital_activation' : 'deposit',
                     amount: payment.amount,
-                    balanceBefore,
-                    balanceAfter: user.balance,
+                    balanceBefore: user.totalBalance - payment.amount,
+                    balanceAfter: user.totalBalance,
                     description: payment.isActivation
-                        ? `Account activation of KES ${payment.amount} via M-Pesa`
-                        : `Deposit of KES ${payment.amount} via M-Pesa`,
+                        ? `Account activation - Initial Capital of KES ${payment.amount}`
+                        : `Deposit of KES ${payment.amount}`,
                     status: 'completed',
                     paymentId: payment._id,
                 });
-
-                // Process referral bonus if activation
-                if (payment.isActivation && user.referredBy) {
-                    const referrer = await User.findById(user.referredBy);
-                    if (referrer) {
-                        const bonusAmount = parseInt(process.env.REFERRAL_BONUS) || 100;
-                        const refBalanceBefore = referrer.balance;
-                        referrer.balance += bonusAmount;
-                        referrer.referralEarnings += bonusAmount;
-                        referrer.totalReferrals += 1;
-                        await referrer.save();
-
-                        await Referral.findOneAndUpdate(
-                            { referrer: referrer._id, referredUser: user._id },
-                            { status: 'active', bonusEarned: bonusAmount, bonusPaid: true, activatedAt: new Date() }
-                        );
-
-                        await Transaction.create({
-                            user: referrer._id,
-                            type: 'referral_bonus',
-                            amount: bonusAmount,
-                            balanceBefore: refBalanceBefore,
-                            balanceAfter: referrer.balance,
-                            description: `Referral bonus for ${user.email} - KES ${bonusAmount}`,
-                        });
-                    }
-                }
             }
         } else if (isTimeout) {
             console.log('⏰ Payment timeout for:', externalReference);
@@ -148,24 +164,42 @@ const checkPaymentStatus = async (req, res) => {
                     // Update user balance
                     const user = await User.findById(payment.user);
                     if (user) {
-                        const balanceBefore = user.balance;
-                        user.balance += payment.amount;
-                        user.totalDeposited = (user.totalDeposited || 0) + payment.amount;
-                        if (payment.isActivation) user.isActive = true;
-                        await user.save();
+                        if (payment.isActivation) {
+                            user.initialCapital = payment.amount;
+                            user.isActive = true;
 
-                        await Transaction.create({
-                            user: user._id,
-                            type: payment.isActivation ? 'capital_activation' : 'deposit',
-                            amount: payment.amount,
-                            balanceBefore,
-                            balanceAfter: user.balance,
-                            description: payment.isActivation
-                                ? `Account activation of KES ${payment.amount} via M-Pesa`
-                                : `Deposit of KES ${payment.amount} via M-Pesa`,
-                            status: 'completed',
-                            paymentId: payment._id,
-                        });
+                            // Process referral bonus
+                            if (user.referredBy) {
+                                const referrer = await User.findById(user.referredBy);
+                                if (referrer) {
+                                    const bonusAmount = parseInt(process.env.REFERRAL_BONUS) || 200;
+                                    referrer.bonusBalance += bonusAmount;
+                                    referrer.referralEarnings += bonusAmount;
+                                    referrer.totalReferrals += 1;
+                                    await referrer.save();
+
+                                    await Referral.findOneAndUpdate(
+                                        { referrer: referrer._id, referredUser: user._id },
+                                        { status: 'active', bonusEarned: bonusAmount, bonusPaid: true, activatedAt: new Date() }
+                                    );
+
+                                    await Transaction.create({
+                                        user: referrer._id,
+                                        type: 'referral_bonus',
+                                        amount: bonusAmount,
+                                        balanceBefore: referrer.totalBalance,
+                                        balanceAfter: referrer.totalBalance + bonusAmount,
+                                        description: `Referral bonus for ${user.email} - KES ${bonusAmount}`,
+                                        status: 'completed',
+                                        metadata: { referredUser: user._id }
+                                    });
+                                }
+                            }
+                        } else if (payment.isDeposit) {
+                            user.profitBalance += payment.amount;
+                            user.totalDeposited = (user.totalDeposited || 0) + payment.amount;
+                        }
+                        await user.save();
                     }
                 } else if (status === 'FAILED') {
                     payment.status = 'failed';

@@ -51,8 +51,9 @@ const AdminDashboard = () => {
     };
 
     const handleAction = async (id, action) => {
+        let reason = null;
         if (action === 'reject') {
-            const reason = prompt('Reason for rejection:');
+            reason = prompt('Reason for rejection:');
             if (!reason) return;
         }
 
@@ -66,18 +67,12 @@ const AdminDashboard = () => {
                 });
                 toast.success('Withdrawal approved!');
             } else if (action === 'reject') {
-                const reason = prompt('Reason for rejection:');
-                if (!reason) {
-                    setActionLoading(null);
-                    return;
-                }
                 await axios.put(`${API_URL}/admin/withdrawals/${id}/reject`, { reason }, {
                     headers: { Authorization: `Bearer ${token}` }
                 });
-                toast.success('Withdrawal rejected!');
+                toast.success('Withdrawal rejected and funds refunded!');
             }
 
-            // Refresh list
             fetchWithdrawals();
         } catch (error) {
             toast.error(error.response?.data?.message || 'Action failed');

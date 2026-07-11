@@ -3,7 +3,7 @@ const User = require('../models/User');
 const Transaction = require('../models/Transaction');
 
 // ============================================
-// REQUEST WITHDRAWAL - Phone Only
+// REQUEST WITHDRAWAL - Only from bonus balance
 // ============================================
 const requestWithdrawal = async (req, res) => {
     try {
@@ -34,18 +34,19 @@ const requestWithdrawal = async (req, res) => {
             });
         }
 
-        if (amount > user.balance) {
+        // Check if user has enough bonus balance (withdrawable)
+        const withdrawableBalance = user.getWithdrawableBalance();
+        if (amount > withdrawableBalance) {
             return res.status(400).json({
                 success: false,
-                message: `Insufficient balance. You have KES ${user.balance.toFixed(2)}`
+                message: `Insufficient withdrawable balance. You have KES ${withdrawableBalance.toFixed(2)} in bonuses. Initial capital and profits cannot be withdrawn.`
             });
         }
 
-        // Use the registered phone number
         if (!user.phone) {
             return res.status(400).json({
                 success: false,
-                message: 'No phone number registered. Please update your profile.'
+                message: 'No phone number registered'
             });
         }
 
@@ -58,20 +59,19 @@ const requestWithdrawal = async (req, res) => {
         });
         await withdrawal.save();
 
-        // Deduct from user balance immediately
-        const balanceBefore = user.balance;
-        user.balance -= amount;
+        // Deduct from bonus balance
+        const bonusBefore = user.bonusBalance;
+        user.bonusBalance -= amount;
         user.totalWithdrawn = (user.totalWithdrawn || 0) + amount;
         await user.save();
 
-        // Create transaction record
         await Transaction.create({
             user: user._id,
             type: 'withdrawal',
             amount: -amount,
-            balanceBefore,
-            balanceAfter: user.balance,
-            description: `Withdrawal request of KES ${amount} to ${user.phone}`,
+            balanceBefore: bonusBefore,
+            balanceAfter: user.bonusBalance,
+            description: `Withdrawal request of KES ${amount} from bonus balance`,
             status: 'pending',
             metadata: { withdrawalId: withdrawal._id }
         });
@@ -83,8 +83,9 @@ const requestWithdrawal = async (req, res) => {
             message: 'Withdrawal request submitted successfully',
             data: {
                 withdrawal,
-                remainingBalance: user.balance,
-                phoneNumber: user.phone
+                remainingBonusBalance: user.bonusBalance,
+                initialCapital: user.initialCapital,
+                profitBalance: user.profitBalance
             }
         });
     } catch (error) {
@@ -106,6 +107,46 @@ const getUserWithdrawals = async (req, res) => {
         res.json({
             success: true,
             data: withdrawals
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
+// ============================================
+// GET WITHDRAWAL SUMMARY
+// ============================================
+const getWithdrawalSummary = async (req, res) => {
+    try {
+        const user = await User.findById(req.user._id);
+
+        const totalWithdrawn = user.totalWithdrawn || 0;
+        const withdrawableBalance = user.getWithdrawableBalance();
+        const minWithdrawal = parseInt(process.env.MINIMUM_WITHDRAWAL) || 100;
+        const maxWithdrawal = parseInt(process.env.MAXIMUM_WITHDRAWAL) || 10000;
+
+        const pendingWithdrawals = await Withdrawal.countDocuments({
+            user: req.user._id,
+            status: 'pending'
+        });
+
+        res.json({
+            success: true,
+            data: {
+                phoneNumber: user.phone,
+                initialCapital: user.initialCapital,
+                profitBalance: user.profitBalance,
+                bonusBalance: user.bonusBalance,
+                withdrawableBalance,
+                totalWithdrawn,
+                pendingWithdrawals,
+                minWithdrawal,
+                maxWithdrawal,
+                canWithdraw: withdrawableBalance >= minWithdrawal && pendingWithdrawals === 0
+            }
         });
     } catch (error) {
         res.status(500).json({
@@ -162,68 +203,16 @@ const updateWithdrawalStatus = async (req, res) => {
         if (status === 'failed') {
             const user = await User.findById(withdrawal.user);
             if (user) {
-                user.balance += withdrawal.amount;
+                user.bonusBalance += withdrawal.amount;
                 user.totalWithdrawn = Math.max(0, (user.totalWithdrawn || 0) - withdrawal.amount);
                 await user.save();
-
-                // Update transaction status
-                await Transaction.findOneAndUpdate(
-                    { 'metadata.withdrawalId': withdrawal._id },
-                    { status: 'failed' }
-                );
             }
-        }
-
-        // If completed, update transaction status
-        if (status === 'completed') {
-            await Transaction.findOneAndUpdate(
-                { 'metadata.withdrawalId': withdrawal._id },
-                { status: 'completed' }
-            );
         }
 
         res.json({
             success: true,
             message: 'Withdrawal status updated',
             data: withdrawal
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            message: error.message
-        });
-    }
-};
-
-// ============================================
-// GET WITHDRAWAL SUMMARY
-// ============================================
-const getWithdrawalSummary = async (req, res) => {
-    try {
-        const user = await User.findById(req.user._id);
-
-        const totalWithdrawn = user.totalWithdrawn || 0;
-        const availableBalance = user.balance || 0;
-        const minWithdrawal = parseInt(process.env.MINIMUM_WITHDRAWAL) || 100;
-        const maxWithdrawal = parseInt(process.env.MAXIMUM_WITHDRAWAL) || 10000;
-
-        // Get pending withdrawals
-        const pendingWithdrawals = await Withdrawal.countDocuments({
-            user: req.user._id,
-            status: 'pending'
-        });
-
-        res.json({
-            success: true,
-            data: {
-                phoneNumber: user.phone,
-                availableBalance,
-                totalWithdrawn,
-                pendingWithdrawals,
-                minWithdrawal,
-                maxWithdrawal,
-                canWithdraw: availableBalance >= minWithdrawal && pendingWithdrawals === 0
-            }
         });
     } catch (error) {
         res.status(500).json({

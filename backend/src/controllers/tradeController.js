@@ -7,7 +7,7 @@ const MAX_TRADE = parseInt(process.env.MAXIMUM_TRADE) || 1000;
 const PROFIT_CHANCE = 0.55;
 
 // ============================================
-// GENERATE REALISTIC PRICE
+// GENERATE PRICE
 // ============================================
 const generatePrice = (asset) => {
     const basePrices = {
@@ -20,7 +20,7 @@ const generatePrice = (asset) => {
 };
 
 // ============================================
-// CREATE TRADE
+// CREATE TRADE - Uses profit balance only
 // ============================================
 const createTrade = async (req, res) => {
     try {
@@ -41,17 +41,29 @@ const createTrade = async (req, res) => {
             });
         }
 
-        if (amount > user.balance) {
+        // Check if user has enough trading balance (profits + bonuses)
+        const tradingBalance = user.getTradingBalance();
+        if (amount > tradingBalance) {
             return res.status(400).json({
                 success: false,
-                message: `Insufficient balance. You have KES ${user.balance.toFixed(2)}`
+                message: `Insufficient trading balance. You have KES ${tradingBalance.toFixed(2)} available for trading. Initial capital of KES ${user.initialCapital} is locked.`
             });
+        }
+
+        // Determine which balance to use (profits first, then bonuses)
+        let profitDeduction = 0;
+        let bonusDeduction = 0;
+
+        if (user.profitBalance >= amount) {
+            profitDeduction = amount;
+        } else {
+            profitDeduction = user.profitBalance;
+            bonusDeduction = amount - user.profitBalance;
         }
 
         const price = generatePrice(asset);
         const quantity = amount / price;
 
-        // Create trade
         const trade = new Trade({
             user: user._id,
             type,
@@ -65,9 +77,12 @@ const createTrade = async (req, res) => {
 
         await trade.save();
 
-        // Deduct from user balance
-        const balanceBefore = user.balance;
-        user.balance -= amount;
+        // Deduct from balances
+        const profitBefore = user.profitBalance;
+        const bonusBefore = user.bonusBalance;
+
+        user.profitBalance -= profitDeduction;
+        user.bonusBalance -= bonusDeduction;
         user.totalTrades += 1;
         await user.save();
 
@@ -76,15 +91,19 @@ const createTrade = async (req, res) => {
             user: user._id,
             type: 'trade_open',
             amount: -amount,
-            balanceBefore,
-            balanceAfter: user.balance,
+            balanceBefore: profitBefore + bonusBefore,
+            balanceAfter: user.getTradingBalance(),
             description: `Trade opened: ${type.toUpperCase()} ${quantity.toFixed(4)} ${asset} at KES ${price}`,
             status: 'completed',
-            metadata: { tradeId: trade._id }
+            metadata: {
+                tradeId: trade._id,
+                profitDeduction,
+                bonusDeduction
+            }
         });
 
         console.log(`📊 Trade opened: ${type.toUpperCase()} ${quantity.toFixed(4)} ${asset} | KES ${amount}`);
-        console.log(`💰 Balance after open: KES ${user.balance.toFixed(2)}`);
+        console.log(`💰 Trading balance after: KES ${user.getTradingBalance().toFixed(2)}`);
 
         // Auto close after random delay (10-40 seconds)
         const closeDelay = Math.floor(Math.random() * 30000) + 10000;
@@ -97,7 +116,8 @@ const createTrade = async (req, res) => {
             message: 'Trade opened successfully!',
             data: {
                 trade,
-                remainingBalance: user.balance,
+                remainingTradingBalance: user.getTradingBalance(),
+                initialCapital: user.initialCapital,
                 price,
                 quantity: quantity.toFixed(4),
                 estimatedCloseTime: new Date(Date.now() + closeDelay)
@@ -113,17 +133,12 @@ const createTrade = async (req, res) => {
 };
 
 // ============================================
-// AUTO CLOSE TRADE - FIXED BALANCE UPDATE
+// AUTO CLOSE TRADE
 // ============================================
 const autoCloseTrade = async (tradeId) => {
     try {
         const trade = await Trade.findById(tradeId);
-        if (!trade || trade.status !== 'open') {
-            console.log(`⚠️ Trade ${tradeId} not found or already closed`);
-            return;
-        }
-
-        console.log(`📊 Closing trade: ${trade.asset} ${trade.type} | Amount: KES ${trade.amount}`);
+        if (!trade || trade.status !== 'open') return;
 
         // Generate realistic small profit or loss
         const isProfit = Math.random() < PROFIT_CHANCE;
@@ -134,10 +149,7 @@ const autoCloseTrade = async (tradeId) => {
             percentageChange = -((Math.random() * 1.7) + 0.1); // 0.1% - 1.8% loss
         }
 
-        // Calculate close price
         const closePrice = Math.round((trade.openPrice * (1 + (percentageChange / 100))) * 100) / 100;
-
-        // Calculate profit/loss
         let profitLoss;
         if (trade.type === 'buy') {
             profitLoss = (closePrice - trade.openPrice) * trade.quantity;
@@ -146,7 +158,6 @@ const autoCloseTrade = async (tradeId) => {
         }
         profitLoss = Math.round(profitLoss * 100) / 100;
 
-        // Update trade
         trade.status = 'closed';
         trade.closePrice = closePrice;
         trade.closeTime = new Date();
@@ -157,24 +168,13 @@ const autoCloseTrade = async (tradeId) => {
         trade.duration = Math.floor((trade.closeTime - trade.openTime) / 1000);
         await trade.save();
 
-        // ============================================
-        // FIXED: Update user balance correctly
-        // ============================================
         const user = await User.findById(trade.user);
-        if (!user) {
-            console.error(`❌ User not found for trade: ${tradeId}`);
-            return;
-        }
+        if (!user) return;
 
-        const balanceBefore = user.balance;
+        // Update profit balance with the result
+        const profitBefore = user.profitBalance;
+        user.profitBalance += profitLoss; // Add profit or subtract loss
 
-        // The user gets back the original amount + profit/loss
-        // Since the original amount was deducted when the trade opened,
-        // we add the total return (amount + profitLoss) back to the balance
-        const totalReturn = trade.amount + profitLoss;
-        user.balance += totalReturn; // Add the full amount back
-
-        // Update profit/loss stats
         if (profitLoss >= 0) {
             user.totalProfit += profitLoss;
         } else {
@@ -182,29 +182,22 @@ const autoCloseTrade = async (tradeId) => {
         }
         await user.save();
 
-        console.log(`💰 Balance before: KES ${balanceBefore.toFixed(2)}`);
-        console.log(`💰 Total return: KES ${totalReturn.toFixed(2)} (${profitLoss >= 0 ? '+' : ''}${profitLoss.toFixed(2)})`);
-        console.log(`💰 New balance: KES ${user.balance.toFixed(2)}`);
-
         // Record transaction
+        const totalReturn = trade.amount + profitLoss;
         await Transaction.create({
             user: user._id,
             type: profitLoss >= 0 ? 'trade_profit' : 'trade_loss',
             amount: totalReturn,
-            balanceBefore,
-            balanceAfter: user.balance,
-            description: `Trade closed: ${trade.type.toUpperCase()} ${trade.quantity.toFixed(4)} ${trade.asset} | ${profitLoss >= 0 ? 'Profit' : 'Loss'} of KES ${Math.abs(profitLoss).toFixed(2)} (${trade.profitPercentage.toFixed(2)}%)`,
+            balanceBefore: profitBefore,
+            balanceAfter: user.profitBalance,
+            description: `Trade closed: ${trade.type.toUpperCase()} ${trade.quantity.toFixed(4)} ${trade.asset} | ${profitLoss >= 0 ? 'Profit' : 'Loss'} of KES ${Math.abs(profitLoss).toFixed(2)}`,
             status: 'completed',
-            metadata: {
-                tradeId: trade._id,
-                profitLoss,
-                percentage: profitLoss >= 0 ? trade.profitPercentage : -trade.lossPercentage
-            }
+            metadata: { tradeId: trade._id }
         });
 
         console.log(`✅ Trade closed: ${trade.asset} ${trade.type} | P/L: ${profitLoss >= 0 ? '+' : ''}${profitLoss.toFixed(2)} KES`);
-        console.log(`✅ New balance: KES ${user.balance.toFixed(2)}`);
-
+        console.log(`💰 New trading balance: KES ${user.getTradingBalance().toFixed(2)}`);
+        console.log(`🔒 Initial capital: KES ${user.initialCapital} (locked)`);
     } catch (error) {
         console.error('❌ Auto-close trade error:', error.message);
     }
@@ -226,8 +219,6 @@ const getUserTrades = async (req, res) => {
             .skip(skip);
 
         const total = await Trade.countDocuments(filter);
-
-        // Calculate total P/L for the current view
         const totalProfitLoss = trades.reduce((sum, t) => sum + (t.profitLoss || 0), 0);
 
         res.json({
@@ -256,7 +247,6 @@ const getUserTrades = async (req, res) => {
 // ============================================
 const getTradeStats = async (req, res) => {
     try {
-        // Get closed trades stats
         const stats = await Trade.aggregate([
             { $match: { user: req.user._id, status: 'closed' } },
             {
@@ -268,8 +258,6 @@ const getTradeStats = async (req, res) => {
                     winningTrades: { $sum: { $cond: [{ $gte: ['$profitLoss', 0] }, 1, 0] } },
                     losingTrades: { $sum: { $cond: [{ $lt: ['$profitLoss', 0] }, 1, 0] } },
                     totalAmount: { $sum: '$amount' },
-                    avgProfit: { $avg: { $cond: [{ $gte: ['$profitLoss', 0] }, '$profitLoss', null] } },
-                    avgLoss: { $avg: { $cond: [{ $lt: ['$profitLoss', 0] }, '$profitLoss', null] } },
                 }
             }
         ]);
@@ -279,6 +267,7 @@ const getTradeStats = async (req, res) => {
             status: 'open'
         });
 
+        const user = await User.findById(req.user._id);
         const result = stats.length > 0 ? {
             totalProfit: Math.round(stats[0].totalProfit * 100) / 100 || 0,
             totalLoss: Math.round(Math.abs(stats[0].totalLoss) * 100) / 100 || 0,
@@ -286,12 +275,8 @@ const getTradeStats = async (req, res) => {
             totalTrades: stats[0].totalTrades || 0,
             winningTrades: stats[0].winningTrades || 0,
             losingTrades: stats[0].losingTrades || 0,
-            winRate: stats[0].totalTrades > 0
-                ? Math.round((stats[0].winningTrades / stats[0].totalTrades) * 100 * 100) / 100
-                : 0,
+            winRate: stats[0].totalTrades > 0 ? Math.round((stats[0].winningTrades / stats[0].totalTrades) * 100 * 100) / 100 : 0,
             totalAmount: Math.round(stats[0].totalAmount * 100) / 100 || 0,
-            avgProfit: Math.round((stats[0].avgProfit || 0) * 100) / 100,
-            avgLoss: Math.round(Math.abs(stats[0].avgLoss || 0) * 100) / 100,
         } : {
             totalProfit: 0,
             totalLoss: 0,
@@ -301,17 +286,16 @@ const getTradeStats = async (req, res) => {
             losingTrades: 0,
             winRate: 0,
             totalAmount: 0,
-            avgProfit: 0,
-            avgLoss: 0,
         };
 
         result.openTrades = openTrades;
-        result.currentBalance = req.user.balance || 0;
+        result.initialCapital = user?.initialCapital || 0;
+        result.profitBalance = user?.profitBalance || 0;
+        result.bonusBalance = user?.bonusBalance || 0;
+        result.tradingBalance = user?.getTradingBalance() || 0;
+        result.totalBalance = user?.totalBalance || 0;
 
-        res.json({
-            success: true,
-            data: result
-        });
+        res.json({ success: true, data: result });
     } catch (error) {
         console.error('Get stats error:', error.message);
         res.status(500).json({

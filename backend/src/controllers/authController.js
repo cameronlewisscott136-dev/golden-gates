@@ -16,6 +16,15 @@ const register = async (req, res) => {
     try {
         const { email, phone, password, firstName, lastName, referralCode } = req.body;
 
+        console.log('📝 Registration attempt for:', email);
+
+        if (!email || !phone || !password || !firstName || !lastName) {
+            return res.status(400).json({
+                success: false,
+                message: 'All fields are required'
+            });
+        }
+
         const existing = await User.findOne({ $or: [{ email }, { phone }] });
         if (existing) {
             return res.status(400).json({
@@ -26,14 +35,20 @@ const register = async (req, res) => {
 
         const verificationCode = generateCode();
         const user = new User({
-            email, phone, password, firstName, lastName,
+            email,
+            phone,
+            password,
+            firstName,
+            lastName,
             verificationCode,
             verificationCodeExpiry: new Date(Date.now() + 10 * 60 * 1000)
         });
 
         if (referralCode) {
             const referrer = await User.findOne({ referralCode });
-            if (referrer) user.referredBy = referrer._id;
+            if (referrer) {
+                user.referredBy = referrer._id;
+            }
         }
 
         await user.save();
@@ -69,14 +84,20 @@ const register = async (req, res) => {
                     isVerified: user.isVerified,
                     isActive: user.isActive,
                     referralCode: user.referralCode,
-                    balance: user.balance
+                    initialCapital: user.initialCapital,
+                    profitBalance: user.profitBalance,
+                    bonusBalance: user.bonusBalance,
+                    totalBalance: user.totalBalance
                 },
                 token
             }
         });
     } catch (error) {
         console.error('Registration error:', error.message);
-        res.status(500).json({ success: false, message: 'Server error during registration' });
+        res.status(500).json({
+            success: false,
+            message: 'Server error during registration'
+        });
     }
 };
 
@@ -86,6 +107,7 @@ const register = async (req, res) => {
 const login = async (req, res) => {
     try {
         const { email, password } = req.body;
+
         const user = await User.findOne({ email }).select('+password');
         if (!user) {
             return res.status(401).json({ success: false, message: 'Invalid credentials' });
@@ -110,7 +132,12 @@ const login = async (req, res) => {
                     lastName: user.lastName,
                     isVerified: user.isVerified,
                     isActive: user.isActive,
-                    balance: user.balance,
+                    initialCapital: user.initialCapital,
+                    profitBalance: user.profitBalance,
+                    bonusBalance: user.bonusBalance,
+                    tradingBalance: user.getTradingBalance(),
+                    withdrawableBalance: user.getWithdrawableBalance(),
+                    totalBalance: user.totalBalance,
                     referralCode: user.referralCode,
                     referralEarnings: user.referralEarnings,
                     totalReferrals: user.totalReferrals
@@ -132,8 +159,14 @@ const verifyEmail = async (req, res) => {
         const { code } = req.body;
         const user = await User.findById(req.user._id).select('+verificationCode +verificationCodeExpiry');
 
-        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-        if (user.isVerified) return res.status(400).json({ success: false, message: 'Email already verified' });
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        if (user.isVerified) {
+            return res.status(400).json({ success: false, message: 'Email already verified' });
+        }
+
         if (!user.isVerificationCodeValid(code)) {
             return res.status(400).json({ success: false, message: 'Invalid or expired code' });
         }
@@ -148,7 +181,19 @@ const verifyEmail = async (req, res) => {
         res.json({
             success: true,
             message: 'Email verified successfully',
-            data: { user: { id: user._id, email: user.email, isVerified: user.isVerified, isActive: user.isActive }, token }
+            data: {
+                user: {
+                    id: user._id,
+                    email: user.email,
+                    isVerified: user.isVerified,
+                    isActive: user.isActive,
+                    initialCapital: user.initialCapital,
+                    profitBalance: user.profitBalance,
+                    bonusBalance: user.bonusBalance,
+                    totalBalance: user.totalBalance
+                },
+                token
+            }
         });
     } catch (error) {
         console.error('Verification error:', error.message);
@@ -162,8 +207,13 @@ const verifyEmail = async (req, res) => {
 const resendVerification = async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('+verificationCode +verificationCodeExpiry');
-        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-        if (user.isVerified) return res.status(400).json({ success: false, message: 'Email already verified' });
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
+
+        if (user.isVerified) {
+            return res.status(400).json({ success: false, message: 'Email already verified' });
+        }
 
         const code = generateCode();
         user.verificationCode = code;
@@ -179,23 +229,49 @@ const resendVerification = async (req, res) => {
 };
 
 // ============================================
-// ACTIVATE ACCOUNT (First Deposit)
+// ACTIVATE ACCOUNT
 // ============================================
 const activateAccount = async (req, res) => {
     try {
         const { phoneNumber, amount } = req.body;
         const user = await User.findById(req.user._id);
 
-        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-        if (user.isActive) return res.status(400).json({ success: false, message: 'Account already activated' });
-        if (!user.isVerified) return res.status(400).json({ success: false, message: 'Please verify your email first' });
+        console.log("\n========================================");
+        console.log("🚀 ACCOUNT ACTIVATION REQUEST");
+        console.log("========================================");
+        console.log(`👤 User: ${user.email}`);
+        console.log(`📱 Phone: ${phoneNumber}`);
+        console.log(`💰 Amount: KES ${amount}`);
+        console.log("========================================\n");
+
+        if (!phoneNumber || !amount) {
+            return res.status(400).json({
+                success: false,
+                message: "Phone number and amount are required",
+            });
+        }
+
+        if (user.isActive) {
+            return res.status(400).json({
+                success: false,
+                message: "Account already activated",
+            });
+        }
+
+        if (!user.isVerified) {
+            return res.status(400).json({
+                success: false,
+                message: "Please verify your email first",
+            });
+        }
 
         const requiredAmount = parseInt(process.env.CAPITAL_REQUIRED) || 200;
         const depositAmount = parseFloat(amount);
+
         if (!depositAmount || depositAmount < requiredAmount) {
             return res.status(400).json({
                 success: false,
-                message: `Minimum activation deposit is KES ${requiredAmount}`
+                message: `Minimum activation capital is KES ${requiredAmount}`,
             });
         }
 
@@ -205,11 +281,14 @@ const activateAccount = async (req, res) => {
             depositAmount,
             externalReference,
             `${user.firstName} ${user.lastName}`,
-            'Account Activation'
+            'Account Activation - Initial Capital'
         );
 
         if (!result.success) {
-            return res.status(500).json({ success: false, message: result.error || 'Payment initiation failed' });
+            return res.status(500).json({
+                success: false,
+                message: result.error || 'Payment initiation failed'
+            });
         }
 
         const payment = new Payment({
@@ -220,7 +299,7 @@ const activateAccount = async (req, res) => {
             email: user.email,
             amount: depositAmount,
             customerName: `${user.firstName} ${user.lastName}`,
-            description: 'Account Activation',
+            description: 'Account Activation - Initial Capital',
             status: 'pending',
             payheroTransactionId: result.payheroReference || '',
             isActivation: true,
@@ -237,6 +316,7 @@ const activateAccount = async (req, res) => {
                 amount: depositAmount,
                 status: 'pending',
                 paymentId: payment._id,
+                message: 'Your initial capital of KES 200 will be locked and never used for trading.'
             }
         });
     } catch (error) {
@@ -246,16 +326,16 @@ const activateAccount = async (req, res) => {
 };
 
 // ============================================
-// DEPOSIT (Additional Deposits)
+// DEPOSIT
 // ============================================
 const deposit = async (req, res) => {
     try {
         const { phoneNumber, amount } = req.body;
         const user = await User.findById(req.user._id);
 
-        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
-        if (!user.isActive) return res.status(400).json({ success: false, message: 'Account not activated' });
-        if (!user.isVerified) return res.status(400).json({ success: false, message: 'Email not verified' });
+        if (!user.isActive) {
+            return res.status(403).json({ success: false, message: 'Account not activated' });
+        }
 
         if (amount < 100) {
             return res.status(400).json({ success: false, message: 'Minimum deposit is KES 100' });
@@ -271,7 +351,10 @@ const deposit = async (req, res) => {
         );
 
         if (!result.success) {
-            return res.status(500).json({ success: false, message: result.error || 'Payment initiation failed' });
+            return res.status(500).json({
+                success: false,
+                message: result.error || 'Payment initiation failed'
+            });
         }
 
         const payment = new Payment({
@@ -308,12 +391,18 @@ const deposit = async (req, res) => {
 };
 
 // ============================================
-// GET ME
+// GET CURRENT USER
 // ============================================
 const getMe = async (req, res) => {
     try {
         const user = await User.findById(req.user._id);
-        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
 
         res.json({
             success: true,
@@ -326,7 +415,12 @@ const getMe = async (req, res) => {
                     lastName: user.lastName,
                     isVerified: user.isVerified,
                     isActive: user.isActive,
-                    balance: user.balance,
+                    initialCapital: user.initialCapital,
+                    profitBalance: user.profitBalance,
+                    bonusBalance: user.bonusBalance,
+                    tradingBalance: user.getTradingBalance(),
+                    withdrawableBalance: user.getWithdrawableBalance(),
+                    totalBalance: user.totalBalance,
                     referralCode: user.referralCode,
                     referralEarnings: user.referralEarnings,
                     totalReferrals: user.totalReferrals,
@@ -341,7 +435,10 @@ const getMe = async (req, res) => {
         });
     } catch (error) {
         console.error('Get me error:', error.message);
-        res.status(500).json({ success: false, message: 'Server error' });
+        res.status(500).json({
+            success: false,
+            message: 'Server error'
+        });
     }
 };
 
@@ -351,16 +448,31 @@ const getMe = async (req, res) => {
 const checkActivationStatus = async (req, res) => {
     try {
         const user = await User.findById(req.user._id);
+
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'User not found'
+            });
+        }
+
         res.json({
             success: true,
             data: {
                 isActive: user.isActive,
                 isVerified: user.isVerified,
-                balance: user.balance,
+                initialCapital: user.initialCapital,
+                profitBalance: user.profitBalance,
+                bonusBalance: user.bonusBalance,
+                totalBalance: user.totalBalance,
             }
         });
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error('Check activation error:', error.message);
+        res.status(500).json({
+            success: false,
+            message: 'Server error'
+        });
     }
 };
 

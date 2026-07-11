@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import api from '../../services/api';
 import toast from 'react-hot-toast';
-import { FaPhone, FaWallet, FaClock, FaCheckCircle } from 'react-icons/fa';
+import { FaPhone, FaWallet, FaClock, FaLock, FaGift } from 'react-icons/fa';
 
 const Withdraw = () => {
     const { user, updateUser } = useAuth();
@@ -42,8 +42,8 @@ const Withdraw = () => {
             return toast.error(`Maximum withdrawal is KES ${maxWithdrawal}`);
         }
 
-        if (withdrawAmount > user.balance) {
-            return toast.error(`You have KES ${user.balance.toFixed(2)}`);
+        if (!summary?.canWithdraw) {
+            return toast.error('Insufficient bonus balance for withdrawal');
         }
 
         if (!user.phone) {
@@ -54,7 +54,7 @@ const Withdraw = () => {
         try {
             const response = await api.post('/withdrawals/request', { amount: withdrawAmount });
             toast.success('Withdrawal request submitted successfully!');
-            updateUser({ ...user, balance: response.data.data.remainingBalance });
+            updateUser({ ...user, bonusBalance: response.data.data.remainingBonusBalance });
             setAmount('');
             fetchSummary();
         } catch (error) {
@@ -74,7 +74,7 @@ const Withdraw = () => {
         );
     }
 
-    const canWithdraw = summary?.canWithdraw && user.balance >= minWithdrawal;
+    const canWithdraw = summary?.canWithdraw && summary?.withdrawableBalance >= minWithdrawal;
 
     return (
         <div className="bg-white rounded-xl shadow-lg p-6">
@@ -83,22 +83,32 @@ const Withdraw = () => {
                 Request Withdrawal
             </h2>
 
-            {/* Info Cards */}
+            {/* Balance Info */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
                 <div className="bg-green-50 p-4 rounded-lg border border-green-200">
-                    <p className="text-sm text-green-700">Available Balance</p>
-                    <p className="text-2xl font-bold text-green-600">KES {user?.balance?.toFixed(2) || '0.00'}</p>
+                    <p className="text-sm text-green-700">🔒 Initial Capital</p>
+                    <p className="text-lg font-bold text-green-600">KES {summary?.initialCapital?.toFixed(2) || '0.00'}</p>
+                    <p className="text-xs text-green-600">Locked - Cannot withdraw</p>
                 </div>
                 <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
-                    <p className="text-sm text-blue-700">Registered Phone</p>
-                    <div className="flex items-center gap-2">
-                        <FaPhone className="text-blue-500" />
-                        <p className="text-lg font-bold text-blue-600">{user?.phone || 'Not set'}</p>
-                    </div>
+                    <p className="text-sm text-blue-700">📈 Profit Balance</p>
+                    <p className="text-lg font-bold text-blue-600">KES {summary?.profitBalance?.toFixed(2) || '0.00'}</p>
+                    <p className="text-xs text-blue-600">Cannot withdraw - Use for trading</p>
                 </div>
                 <div className="bg-purple-50 p-4 rounded-lg border border-purple-200">
-                    <p className="text-sm text-purple-700">Total Withdrawn</p>
-                    <p className="text-2xl font-bold text-purple-600">KES {summary?.totalWithdrawn?.toFixed(2) || '0.00'}</p>
+                    <p className="text-sm text-purple-700">🎁 Bonus Balance</p>
+                    <p className="text-lg font-bold text-purple-600">KES {summary?.withdrawableBalance?.toFixed(2) || '0.00'}</p>
+                    <p className="text-xs text-purple-600">Withdrawable</p>
+                </div>
+            </div>
+
+            {/* Phone Info */}
+            <div className="bg-blue-50 p-3 rounded-lg border border-blue-200 mb-4">
+                <div className="flex items-center gap-2">
+                    <FaPhone className="text-blue-500" />
+                    <p className="text-sm text-blue-700">
+                        Withdrawals will be sent to: <strong>{user?.phone || 'Not set'}</strong>
+                    </p>
                 </div>
             </div>
 
@@ -109,28 +119,15 @@ const Withdraw = () => {
                         <FaClock className="text-yellow-500" />
                         <p className="text-sm text-yellow-700">
                             You have {summary.pendingWithdrawals} pending withdrawal request(s).
-                            Please wait for them to be processed before making new requests.
                         </p>
                     </div>
                 </div>
             )}
 
-            {/* Phone Info */}
-            <div className="bg-blue-50 p-3 rounded-lg border border-blue-200 mb-4">
-                <div className="flex items-center gap-2">
-                    <FaPhone className="text-blue-500" />
-                    <p className="text-sm text-blue-700">
-                        Withdrawals will be sent to your registered phone number: <strong>{user?.phone || 'Not set'}</strong>
-                    </p>
-                </div>
-            </div>
-
             <form onSubmit={handleSubmit}>
                 <div className="space-y-4">
                     <div>
-                        <label className="block text-sm font-medium mb-1">
-                            Amount (KES)
-                        </label>
+                        <label className="block text-sm font-medium mb-1">Amount (KES)</label>
                         <div className="relative">
                             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                                 <span className="text-gray-500 font-semibold">KES</span>
@@ -149,22 +146,8 @@ const Withdraw = () => {
                         <div className="flex justify-between mt-1 text-xs text-gray-500">
                             <span>Min: KES {minWithdrawal}</span>
                             <span>Max: KES {maxWithdrawal}</span>
-                            <span>Available: KES {user?.balance?.toFixed(2) || '0.00'}</span>
+                            <span>Available: KES {summary?.withdrawableBalance?.toFixed(2) || '0.00'}</span>
                         </div>
-                    </div>
-
-                    {/* Quick Amount Buttons */}
-                    <div className="flex flex-wrap gap-2">
-                        {[100, 200, 500, 1000].map((amt) => (
-                            <button
-                                key={amt}
-                                type="button"
-                                onClick={() => setAmount(amt.toString())}
-                                className="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded-lg text-sm transition"
-                            >
-                                KES {amt}
-                            </button>
-                        ))}
                     </div>
 
                     <button
@@ -184,21 +167,16 @@ const Withdraw = () => {
                                 Processing...
                             </span>
                         ) : !canWithdraw ? (
-                            summary?.pendingWithdrawals > 0 ? 'Pending Withdrawal(s) - Please Wait' : 'Insufficient Balance'
+                            summary?.pendingWithdrawals > 0 ? 'Pending Withdrawal(s) - Please Wait' : 'Insufficient Bonus Balance'
                         ) : (
                             'Request Withdrawal'
                         )}
                     </button>
 
-                    {!canWithdraw && user.balance < minWithdrawal && (
+                    {!canWithdraw && summary?.withdrawableBalance < minWithdrawal && (
                         <p className="text-sm text-red-600 text-center">
-                            Minimum withdrawal is KES {minWithdrawal}. You have KES {user?.balance?.toFixed(2) || '0.00'}
-                        </p>
-                    )}
-
-                    {!user.phone && (
-                        <p className="text-sm text-red-600 text-center">
-                            Please update your profile with a phone number first
+                            You need at least KES {minWithdrawal} in bonus balance to withdraw.
+                            Current bonus: KES {summary?.withdrawableBalance?.toFixed(2) || '0.00'}
                         </p>
                     )}
                 </div>
