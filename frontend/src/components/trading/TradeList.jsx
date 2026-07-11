@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext';
 import tradeService from '../../services/tradeService';
+import authService from '../../services/authService';
 import Navbar from '../common/Navbar';
 import { FaPlus, FaEye } from 'react-icons/fa';
 
 const TradeList = () => {
+    const { user, updateUser } = useAuth();
     const [trades, setTrades] = useState([]);
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState('all');
@@ -13,6 +16,9 @@ const TradeList = () => {
 
     useEffect(() => {
         fetchTrades();
+        // Poll for balance updates every 10 seconds
+        const interval = setInterval(refreshBalance, 10000);
+        return () => clearInterval(interval);
     }, [filter, pagination.page]);
 
     const fetchTrades = async () => {
@@ -24,10 +30,23 @@ const TradeList = () => {
             setTrades(response.data.trades);
             setTotalProfitLoss(response.data.totalProfitLoss || 0);
             setPagination(response.data.pagination);
+            // Refresh balance after fetching trades
+            await refreshBalance();
         } catch (error) {
             console.error('Error fetching trades:', error);
         } finally {
             setLoading(false);
+        }
+    };
+
+    const refreshBalance = async () => {
+        try {
+            const response = await authService.getCurrentUser();
+            if (response.data?.user) {
+                updateUser(response.data.user);
+            }
+        } catch (error) {
+            console.error('Error refreshing balance:', error);
         }
     };
 
@@ -51,12 +70,20 @@ const TradeList = () => {
                         <h1 className="text-3xl font-bold">Trades</h1>
                         <p className="text-gray-600 mt-1">Manage your trading activity</p>
                     </div>
-                    <Link
-                        to="/trades/create"
-                        className="bg-gradient-to-r from-yellow-400 to-yellow-600 text-white font-semibold py-2 px-4 rounded-lg hover:shadow-lg hover:scale-105 transition flex items-center gap-2"
-                    >
-                        <FaPlus /> New Trade
-                    </Link>
+                    <div className="flex items-center gap-4">
+                        <div className="bg-yellow-50 px-4 py-2 rounded-lg">
+                            <span className="text-sm text-gray-600">Balance:</span>
+                            <span className="ml-2 font-bold text-yellow-600">
+                                KES {user?.balance?.toFixed(2) || '0.00'}
+                            </span>
+                        </div>
+                        <Link
+                            to="/trades/create"
+                            className="bg-gradient-to-r from-yellow-400 to-yellow-600 text-white font-semibold py-2 px-4 rounded-lg hover:shadow-lg hover:scale-105 transition flex items-center gap-2"
+                        >
+                            <FaPlus /> New Trade
+                        </Link>
+                    </div>
                 </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
