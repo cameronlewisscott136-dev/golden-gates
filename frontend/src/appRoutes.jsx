@@ -29,6 +29,11 @@ import Profile from './components/profile/Profile.jsx';
 // Payment Status
 import PaymentStatus from './components/payments/PaymentStatus.jsx';
 
+//admin
+import AdminLogin from './components/admin/AdminLogin';
+import AdminDashboard from './components/admin/AdminDashboard';
+import AdminProtectedRoute from './components/admin/AdminProtectedRoute';
+
 const AppRoutes = () => {
   return (
     <Routes>
@@ -53,6 +58,11 @@ const AppRoutes = () => {
         <Route path="/transactions" element={<TransactionList />} />
         <Route path="/referrals" element={<ReferralDashboard />} />
         <Route path="/profile" element={<Profile />} />
+      </Route>
+
+      <Route path="/admin/login" element={<AdminLogin />} />
+      <Route element={<AdminProtectedRoute />}>
+        <Route path="/admin/dashboard" element={<AdminDashboard />} />
       </Route>
 
       {/* 404 */}

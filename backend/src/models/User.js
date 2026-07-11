@@ -11,6 +11,7 @@ const userSchema = new mongoose.Schema({
     verificationCodeExpiry: { type: Date, select: false },
     isVerified: { type: Boolean, default: false },
     isActive: { type: Boolean, default: false },
+    isAdmin: { type: Boolean, default: false }, // ← ADD THIS FIELD
     balance: { type: Number, default: 0 },
     referralCode: { type: String, unique: true, sparse: true },
     referredBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
