@@ -5,13 +5,15 @@ const {
     getUserWithdrawals,
     getAllWithdrawals,
     updateWithdrawalStatus,
+    getWithdrawalSummary,
 } = require('../controllers/withdrawalController');
 
 const router = express.Router();
 
-// Protected
+// Protected routes
 router.post('/request', protect, requestWithdrawal);
 router.get('/my-withdrawals', protect, getUserWithdrawals);
+router.get('/summary', protect, getWithdrawalSummary);
 
 // Admin routes (add admin check in production)
 router.get('/all', protect, getAllWithdrawals);

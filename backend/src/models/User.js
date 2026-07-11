@@ -21,9 +21,6 @@ const userSchema = new mongoose.Schema({
     totalLoss: { type: Number, default: 0 },
     totalDeposited: { type: Number, default: 0 },
     totalWithdrawn: { type: Number, default: 0 },
-    bankName: { type: String },
-    bankAccount: { type: String },
-    bankHolder: { type: String },
 }, { timestamps: true });
 
 userSchema.pre('save', async function (next) {
@@ -42,7 +39,9 @@ userSchema.pre('save', function (next) {
 userSchema.methods.generateReferralCode = function () {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let result = '';
-    for (let i = 0; i < 8; i++) result += chars.charAt(Math.floor(Math.random() * chars.length));
+    for (let i = 0; i < 8; i++) {
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
     return result;
 };
 
