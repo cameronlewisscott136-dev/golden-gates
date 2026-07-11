@@ -19,36 +19,44 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 // ============================================
-// CORS CONFIGURATION - FIXED
+// CORS - WORKING CONFIGURATION
 // ============================================
-const allowedOrigins = [
-    'https://golden-gates-kappa.vercel.app',
-    'https://golden-gates-oegh.onrender.com',
-    'http://localhost:3000',
-    'http://localhost:5173',
-    process.env.FRONTEND_URL || '',
-    ...(process.env.ALLOWED_ORIGINS || '').split(',').filter(Boolean)
-].filter(Boolean);
 
-console.log('📋 Allowed CORS origins:', allowedOrigins);
+// Allow all origins with credentials
+app.use((req, res, next) => {
+    const origin = req.headers.origin;
 
-// CORS middleware with specific origins
+    // Always set the specific origin (not '*') when credentials are used
+    if (origin) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+    } else {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+    }
+
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Max-Age', '86400');
+
+    // Handle preflight requests
+    if (req.method === 'OPTIONS') {
+        return res.status(204).end();
+    }
+
+    next();
+});
+
+// Also use cors package as backup with dynamic origin
 app.use(cors({
     origin: function (origin, callback) {
-        // Allow requests with no origin (like mobile apps or curl)
+        // Allow requests with no origin
         if (!origin) {
             return callback(null, true);
         }
-
-        // Allow if origin is in allowed list or development
-        if (allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
-            callback(null, true);
-        } else {
-            console.warn('❌ CORS blocked:', origin);
-            callback(new Error('Not allowed by CORS'));
-        }
+        // Allow all origins
+        return callback(null, true);
     },
-    credentials: true, // Required for cookies/auth headers
+    credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
     exposedHeaders: ['Content-Range', 'X-Content-Range'],
@@ -56,31 +64,6 @@ app.use(cors({
     preflightContinue: false,
     optionsSuccessStatus: 204
 }));
-
-// Handle OPTIONS requests explicitly
-app.options('*', (req, res) => {
-    const origin = req.headers.origin;
-    if (allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
-        res.setHeader('Access-Control-Allow-Origin', origin || '*');
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept');
-        res.setHeader('Access-Control-Allow-Credentials', 'true');
-        res.setHeader('Access-Control-Max-Age', '86400');
-        res.status(204).end();
-    } else {
-        res.status(204).end();
-    }
-});
-
-// Additional CORS headers for all responses
-app.use((req, res, next) => {
-    const origin = req.headers.origin;
-    if (allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
-        res.setHeader('Access-Control-Allow-Origin', origin);
-        res.setHeader('Access-Control-Allow-Credentials', 'true');
-    }
-    next();
-});
 
 app.use(helmet({
     contentSecurityPolicy: false,
@@ -126,16 +109,16 @@ app.use('/api/withdrawals', withdrawalRoutes);
 // Health check
 app.get('/api/health', (req, res) => {
     const origin = req.headers.origin;
-    if (allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
+    if (origin) {
         res.setHeader('Access-Control-Allow-Origin', origin);
-        res.setHeader('Access-Control-Allow-Credentials', 'true');
     }
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.json({
         success: true,
         message: 'Golden Gates API is running',
         timestamp: new Date().toISOString(),
         environment: process.env.NODE_ENV,
-        allowedOrigins: allowedOrigins
+        cors: 'enabled'
     });
 });
 
@@ -144,10 +127,10 @@ app.use((err, req, res, next) => {
     console.error('Error:', err.message);
     const status = err.statusCode || 500;
     const origin = req.headers.origin;
-    if (allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
+    if (origin) {
         res.setHeader('Access-Control-Allow-Origin', origin);
-        res.setHeader('Access-Control-Allow-Credentials', 'true');
     }
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.status(status).json({
         success: false,
         message: err.message || 'Server error'
@@ -157,10 +140,10 @@ app.use((err, req, res, next) => {
 // 404 handler
 app.use((req, res) => {
     const origin = req.headers.origin;
-    if (allowedOrigins.includes(origin) || process.env.NODE_ENV === 'development') {
+    if (origin) {
         res.setHeader('Access-Control-Allow-Origin', origin);
-        res.setHeader('Access-Control-Allow-Credentials', 'true');
     }
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.status(404).json({
         success: false,
         message: 'Route not found'
