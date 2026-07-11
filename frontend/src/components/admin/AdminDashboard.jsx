@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import api from '../../services/api';
+import adminApi from '../../services/adminApi';
 import toast from 'react-hot-toast';
 import WithdrawalManagement from './WithdrawalManagement';
 import { FaSignOutAlt, FaShieldAlt } from 'react-icons/fa';
@@ -10,7 +10,7 @@ const AdminDashboard = () => {
     const navigate = useNavigate();
 
     useEffect(() => {
-        const adminToken = localStorage.getItem('adminToken');
+        const adminToken = localStorage.getItem('adminToken') || sessionStorage.getItem('adminToken');
         if (!adminToken) {
             navigate('/admin/login');
             return;
@@ -21,6 +21,7 @@ const AdminDashboard = () => {
     const handleLogout = () => {
         localStorage.removeItem('adminToken');
         localStorage.removeItem('adminUser');
+        sessionStorage.removeItem('adminToken');
         toast.success('Logged out successfully');
         navigate('/admin/login');
     };

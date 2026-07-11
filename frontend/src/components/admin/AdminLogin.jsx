@@ -18,13 +18,20 @@ const AdminLogin = () => {
             const response = await api.post('/admin/auth/login', { email, password });
 
             if (response.data.success) {
+                // Store admin token and user
                 localStorage.setItem('adminToken', response.data.data.token);
                 localStorage.setItem('adminUser', JSON.stringify(response.data.data.user));
+
+                // Also store in session for redundancy
+                sessionStorage.setItem('adminToken', response.data.data.token);
+
                 toast.success('Admin login successful!');
                 navigate('/admin/dashboard');
             }
         } catch (error) {
-            toast.error(error.response?.data?.message || 'Admin login failed');
+            console.error('Admin login error:', error);
+            const message = error.response?.data?.message || 'Admin login failed';
+            toast.error(message);
         } finally {
             setLoading(false);
         }
