@@ -101,47 +101,81 @@ const register = async (req, res) => {
 };
 
 // ============================================
-// LOGIN USER
+// LOGIN USER - FIXED
 // ============================================
 const login = async (req, res) => {
     try {
         const { email, password } = req.body;
 
+        console.log('🔑 Login attempt for:', email);
+
+        if (!email || !password) {
+            return res.status(400).json({
+                success: false,
+                message: 'Email and password are required'
+            });
+        }
+
+        // Find user and include password field
         const user = await User.findOne({ email }).select('+password');
+
         if (!user) {
-            return res.status(401).json({ success: false, message: 'Invalid credentials' });
+            console.log('❌ User not found:', email);
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid credentials'
+            });
         }
 
-        const isValid = await user.comparePassword(password);
-        if (!isValid) {
-            return res.status(401).json({ success: false, message: 'Invalid credentials' });
+        console.log('✅ User found:', user.email);
+
+        // Compare password
+        const isPasswordValid = await user.comparePassword(password);
+
+        if (!isPasswordValid) {
+            console.log('❌ Invalid password for:', email);
+            return res.status(401).json({
+                success: false,
+                message: 'Invalid credentials'
+            });
         }
 
+        console.log('✅ Password valid for:', email);
+
+        // Generate token
         const token = generateToken(user._id);
+
+        // Return user data (without password)
+        const userData = {
+            id: user._id,
+            email: user.email,
+            phone: user.phone,
+            firstName: user.firstName,
+            lastName: user.lastName,
+            isVerified: user.isVerified,
+            isActive: user.isActive,
+            balance: user.balance,
+            referralCode: user.referralCode,
+            referralEarnings: user.referralEarnings,
+            totalReferrals: user.totalReferrals
+        };
+
+        console.log('✅ Login successful for:', email);
 
         res.json({
             success: true,
             message: 'Login successful',
             data: {
-                user: {
-                    id: user._id,
-                    email: user.email,
-                    phone: user.phone,
-                    firstName: user.firstName,
-                    lastName: user.lastName,
-                    isVerified: user.isVerified,
-                    isActive: user.isActive,
-                    balance: user.balance,
-                    referralCode: user.referralCode,
-                    referralEarnings: user.referralEarnings,
-                    totalReferrals: user.totalReferrals
-                },
+                user: userData,
                 token
             }
         });
     } catch (error) {
-        console.error('Login error:', error.message);
-        res.status(500).json({ success: false, message: 'Server error during login' });
+        console.error('❌ Login error:', error.message);
+        res.status(500).json({
+            success: false,
+            message: 'Server error during login'
+        });
     }
 };
 
@@ -300,13 +334,13 @@ const activateAccount = async (req, res) => {
             user: user._id,
             orderId,
             externalReference,
-            phoneNumber: result.formattedPhone,
+            phoneNumber: result.formattedPhone || phoneNumber,
             email: user.email,
             amount: Math.round(depositAmount),
             customerName: `${user.firstName} ${user.lastName}`,
             description: "Account Activation - Golden Gates",
             status: "pending",
-            payheroTransactionId: result.payheroReference || "",
+            payheroTransactionId: result.payheroReference || result.checkoutRequestId || "",
             paymentChannel: "mpesa",
             isActivation: true,
         });
@@ -324,7 +358,7 @@ const activateAccount = async (req, res) => {
             data: {
                 orderId,
                 externalReference,
-                phoneNumber: result.formattedPhone,
+                phoneNumber: result.formattedPhone || phoneNumber,
                 amount: depositAmount,
                 paymentId: payment._id,
                 status: 'pending',
@@ -416,139 +450,6 @@ const checkActivationStatus = async (req, res) => {
 };
 
 // ============================================
-// UPDATE PROFILE
-// ============================================
-const updateProfile = async (req, res) => {
-    try {
-        const { firstName, lastName, phone } = req.body;
-        const user = await User.findById(req.user._id);
-
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: 'User not found'
-            });
-        }
-
-        if (firstName) user.firstName = firstName;
-        if (lastName) user.lastName = lastName;
-        if (phone) user.phone = phone;
-
-        await user.save();
-
-        res.json({
-            success: true,
-            message: 'Profile updated successfully',
-            data: {
-                user: {
-                    id: user._id,
-                    email: user.email,
-                    phone: user.phone,
-                    firstName: user.firstName,
-                    lastName: user.lastName,
-                    isVerified: user.isVerified,
-                    isActive: user.isActive,
-                    balance: user.balance,
-                    referralCode: user.referralCode
-                }
-            }
-        });
-    } catch (error) {
-        console.error('Update profile error:', error.message);
-        res.status(500).json({
-            success: false,
-            message: 'Server error updating profile'
-        });
-    }
-};
-
-// ============================================
-// CHANGE PASSWORD
-// ============================================
-const changePassword = async (req, res) => {
-    try {
-        const { currentPassword, newPassword } = req.body;
-        const user = await User.findById(req.user._id).select('+password');
-
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: 'User not found'
-            });
-        }
-
-        // Verify current password
-        const isValid = await user.comparePassword(currentPassword);
-        if (!isValid) {
-            return res.status(401).json({
-                success: false,
-                message: 'Current password is incorrect'
-            });
-        }
-
-        // Hash new password
-        user.password = await bcrypt.hash(newPassword, 12);
-        await user.save();
-
-        res.json({
-            success: true,
-            message: 'Password changed successfully'
-        });
-    } catch (error) {
-        console.error('Change password error:', error.message);
-        res.status(500).json({
-            success: false,
-            message: 'Server error changing password'
-        });
-    }
-};
-
-// ============================================
-// GET USER BY ID (Admin)
-// ============================================
-const getUserById = async (req, res) => {
-    try {
-        const user = await User.findById(req.params.id);
-
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: 'User not found'
-            });
-        }
-
-        res.json({
-            success: true,
-            data: {
-                user: {
-                    id: user._id,
-                    email: user.email,
-                    phone: user.phone,
-                    firstName: user.firstName,
-                    lastName: user.lastName,
-                    isVerified: user.isVerified,
-                    isActive: user.isActive,
-                    balance: user.balance,
-                    referralCode: user.referralCode,
-                    referralEarnings: user.referralEarnings,
-                    totalReferrals: user.totalReferrals,
-                    totalTrades: user.totalTrades,
-                    totalProfit: user.totalProfit,
-                    totalLoss: user.totalLoss,
-                    createdAt: user.createdAt
-                }
-            }
-        });
-    } catch (error) {
-        console.error('Get user error:', error.message);
-        res.status(500).json({
-            success: false,
-            message: 'Server error'
-        });
-    }
-};
-
-// ============================================
 // EXPORT ALL CONTROLLER FUNCTIONS
 // ============================================
 module.exports = {
@@ -559,7 +460,4 @@ module.exports = {
     activateAccount,
     getMe,
     checkActivationStatus,
-    updateProfile,
-    changePassword,
-    getUserById,
 };
