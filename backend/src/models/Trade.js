@@ -20,21 +20,4 @@ const tradeSchema = new mongoose.Schema({
     duration: { type: Number, default: 0 },
 }, { timestamps: true });
 
-tradeSchema.pre('save', function (next) {
-    if (this.status === 'closed' && this.closePrice) {
-        this.profitLoss = this.type === 'buy'
-            ? (this.closePrice - this.openPrice) * this.quantity
-            : (this.openPrice - this.closePrice) * this.quantity;
-        const investment = this.amount;
-        if (investment > 0) {
-            this.profitPercentage = (this.profitLoss / investment) * 100;
-            this.lossPercentage = Math.abs(this.profitPercentage);
-        }
-        if (this.closeTime) {
-            this.duration = Math.floor((this.closeTime - this.openTime) / 1000);
-        }
-    }
-    next();
-});
-
 module.exports = mongoose.model('Trade', tradeSchema);
