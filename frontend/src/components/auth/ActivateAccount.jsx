@@ -14,7 +14,7 @@ const ActivateAccount = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     const depositAmount = parseFloat(amount);
-    const requiredAmount = 200;
+    const requiredAmount = 2;
 
     if (!depositAmount || depositAmount < requiredAmount) {
       toast.error(`Minimum deposit for activation is KES ${requiredAmount}`);
