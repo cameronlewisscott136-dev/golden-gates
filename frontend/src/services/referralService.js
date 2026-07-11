@@ -9,6 +9,11 @@ const referralService = {
     getReferralStats: async () => {
         const response = await api.get('/referrals/stats');
         return response.data;
+    },
+
+    getReferralCode: async () => {
+        const response = await api.get('/referrals/code');
+        return response.data;
     }
 };
 

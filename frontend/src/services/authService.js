@@ -29,13 +29,18 @@ const authService = {
         return response.data;
     },
 
-    activateAccount: async (amount) => {
-        const response = await api.post('/auth/activate', { amount });
+    activateAccount: async (data) => {
+        const response = await api.post('/auth/activate', data);
         if (response.data.data) {
             const user = JSON.parse(localStorage.getItem('user'));
             const updatedUser = { ...user, ...response.data.data };
             localStorage.setItem('user', JSON.stringify(updatedUser));
         }
+        return response.data;
+    },
+
+    deposit: async (data) => {
+        const response = await api.post('/auth/deposit', data);
         return response.data;
     },
 
@@ -53,19 +58,15 @@ const authService = {
     },
 
     getToken: () => localStorage.getItem('token'),
-
     getUser: () => {
         const user = localStorage.getItem('user');
         return user ? JSON.parse(user) : null;
     },
-
     isAuthenticated: () => !!localStorage.getItem('token'),
-
     isVerified: () => {
         const user = authService.getUser();
         return user?.isVerified || false;
     },
-
     isActive: () => {
         const user = authService.getUser();
         return user?.isActive || false;

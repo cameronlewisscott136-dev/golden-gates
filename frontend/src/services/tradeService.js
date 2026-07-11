@@ -6,11 +6,6 @@ const tradeService = {
         return response.data;
     },
 
-    closeTrade: async (tradeId, closeData) => {
-        const response = await api.put(`/trades/${tradeId}/close`, closeData);
-        return response.data;
-    },
-
     getTrades: async (params = {}) => {
         const response = await api.get('/trades', { params });
         return response.data;

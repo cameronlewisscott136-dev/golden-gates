@@ -2,7 +2,7 @@ import React from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import ProtectedRoute from './components/common/ProtectedRoute';
 
-// Auth Components
+// Auth
 import Login from './components/auth/Login';
 import Register from './components/auth/Register';
 import VerifyEmail from './components/auth/VerifyEmail';
@@ -26,21 +26,22 @@ import ReferralDashboard from './components/referrals/ReferralDashboard';
 // Profile
 import Profile from './components/profile/Profile';
 
+// Payment Status
+import PaymentStatus from './components/payments/PaymentStatus';
+
 const AppRoutes = () => {
   return (
     <Routes>
-      {/* Public Routes */}
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
       <Route path="/" element={<Navigate to="/dashboard" />} />
 
-      {/* Protected Routes - Partial Auth */}
       <Route element={<ProtectedRoute requireVerification={false} requireActivation={false} />}>
         <Route path="/verify-email" element={<VerifyEmail />} />
         <Route path="/activate" element={<ActivateAccount />} />
+        <Route path="/payment-status/:externalReference" element={<PaymentStatus />} />
       </Route>
 
-      {/* Protected Routes - Full Auth */}
       <Route element={<ProtectedRoute requireVerification={true} requireActivation={true} />}>
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/trades" element={<TradeList />} />
@@ -52,7 +53,6 @@ const AppRoutes = () => {
         <Route path="/profile" element={<Profile />} />
       </Route>
 
-      {/* 404 */}
       <Route path="*" element={<Navigate to="/dashboard" />} />
     </Routes>
   );

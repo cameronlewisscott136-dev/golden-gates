@@ -10,10 +10,7 @@ const getReferrals = async (req, res) => {
             .populate('referredUser', 'email phone firstName lastName isVerified isActive createdAt')
             .sort({ createdAt: -1 });
 
-        // Calculate total earnings from referrals
         const totalEarnings = referrals.reduce((sum, ref) => sum + (ref.bonusEarned || 0), 0);
-
-        // Count active referrals
         const activeReferrals = referrals.filter(ref => ref.status === 'active').length;
         const pendingReferrals = referrals.filter(ref => ref.status === 'pending').length;
 
@@ -30,10 +27,7 @@ const getReferrals = async (req, res) => {
         });
     } catch (error) {
         console.error('Get referrals error:', error.message);
-        res.status(500).json({
-            success: false,
-            message: 'Server error getting referrals'
-        });
+        res.status(500).json({ success: false, message: 'Server error getting referrals' });
     }
 };
 
@@ -71,10 +65,7 @@ const getReferralStats = async (req, res) => {
         });
     } catch (error) {
         console.error('Get referral stats error:', error.message);
-        res.status(500).json({
-            success: false,
-            message: 'Server error getting referral stats'
-        });
+        res.status(500).json({ success: false, message: 'Server error getting referral stats' });
     }
 };
 
@@ -84,14 +75,6 @@ const getReferralStats = async (req, res) => {
 const getReferralCode = async (req, res) => {
     try {
         const user = await User.findById(req.user._id);
-
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: 'User not found'
-            });
-        }
-
         const referralLink = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/register?ref=${user.referralCode}`;
 
         res.json({
@@ -104,15 +87,8 @@ const getReferralCode = async (req, res) => {
         });
     } catch (error) {
         console.error('Get referral code error:', error.message);
-        res.status(500).json({
-            success: false,
-            message: 'Server error'
-        });
+        res.status(500).json({ success: false, message: 'Server error' });
     }
 };
 
-module.exports = {
-    getReferrals,
-    getReferralStats,
-    getReferralCode,
-};
+module.exports = { getReferrals, getReferralStats, getReferralCode };

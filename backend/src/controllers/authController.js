@@ -10,23 +10,12 @@ const { sendVerificationEmail } = require('../config/email');
 const generateCode = () => Math.floor(100000 + Math.random() * 900000).toString();
 
 // ============================================
-// REGISTER - Complete Working Version
+// REGISTER
 // ============================================
 const register = async (req, res) => {
     try {
         const { email, phone, password, firstName, lastName, referralCode } = req.body;
 
-        console.log('📝 Registration attempt for:', email);
-
-        // Validate required fields
-        if (!email || !phone || !password || !firstName || !lastName) {
-            return res.status(400).json({
-                success: false,
-                message: 'All fields are required'
-            });
-        }
-
-        // Check if user exists
         const existing = await User.findOne({ $or: [{ email }, { phone }] });
         if (existing) {
             return res.status(400).json({
@@ -35,29 +24,20 @@ const register = async (req, res) => {
             });
         }
 
-        // Create user - password will be hashed by pre-save hook
         const verificationCode = generateCode();
         const user = new User({
-            email,
-            phone,
-            password, // Will be hashed automatically
-            firstName,
-            lastName,
+            email, phone, password, firstName, lastName,
             verificationCode,
             verificationCodeExpiry: new Date(Date.now() + 10 * 60 * 1000)
         });
 
-        // Handle referral if provided
         if (referralCode) {
             const referrer = await User.findOne({ referralCode });
-            if (referrer) {
-                user.referredBy = referrer._id;
-            }
+            if (referrer) user.referredBy = referrer._id;
         }
 
         await user.save();
 
-        // Create referral record
         if (user.referredBy) {
             await Referral.create({
                 referrer: user.referredBy,
@@ -66,7 +46,6 @@ const register = async (req, res) => {
             });
         }
 
-        // Send verification email (non-blocking)
         try {
             await sendVerificationEmail(email, verificationCode);
             console.log('📧 Verification email sent to:', email);
@@ -75,10 +54,7 @@ const register = async (req, res) => {
             console.error('Email error:', emailError.message);
         }
 
-        // Generate token
         const token = generateToken(user._id);
-
-        console.log('✅ Registration successful for:', email);
 
         res.status(201).json({
             success: true,
@@ -99,63 +75,29 @@ const register = async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('❌ Registration error:', error.message);
-        res.status(500).json({
-            success: false,
-            message: 'Server error during registration'
-        });
+        console.error('Registration error:', error.message);
+        res.status(500).json({ success: false, message: 'Server error during registration' });
     }
 };
 
 // ============================================
-// LOGIN - Complete Working Version
+// LOGIN
 // ============================================
 const login = async (req, res) => {
     try {
         const { email, password } = req.body;
-
-        console.log('🔑 Login attempt for:', email);
-
-        // Validate
-        if (!email || !password) {
-            return res.status(400).json({
-                success: false,
-                message: 'Email and password are required'
-            });
-        }
-
-        // Find user with password field
         const user = await User.findOne({ email }).select('+password');
-
         if (!user) {
-            console.log('❌ User not found:', email);
-            return res.status(401).json({
-                success: false,
-                message: 'Invalid credentials'
-            });
+            return res.status(401).json({ success: false, message: 'Invalid credentials' });
         }
 
-        console.log('✅ User found:', user.email);
-        console.log('📝 Hashed password stored:', user.password ? 'Yes' : 'No');
-
-        // Compare passwords
-        const isMatch = await user.comparePassword(password);
-        console.log('🔐 Password match:', isMatch);
-
-        if (!isMatch) {
-            console.log('❌ Invalid password for:', email);
-            return res.status(401).json({
-                success: false,
-                message: 'Invalid credentials'
-            });
+        const isValid = await user.comparePassword(password);
+        if (!isValid) {
+            return res.status(401).json({ success: false, message: 'Invalid credentials' });
         }
 
-        console.log('✅ Login successful for:', email);
-
-        // Generate token
         const token = generateToken(user._id);
 
-        // Return user data
         res.json({
             success: true,
             message: 'Login successful',
@@ -177,11 +119,8 @@ const login = async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('❌ Login error:', error.message);
-        res.status(500).json({
-            success: false,
-            message: 'Server error during login'
-        });
+        console.error('Login error:', error.message);
+        res.status(500).json({ success: false, message: 'Server error during login' });
     }
 };
 
@@ -193,14 +132,8 @@ const verifyEmail = async (req, res) => {
         const { code } = req.body;
         const user = await User.findById(req.user._id).select('+verificationCode +verificationCodeExpiry');
 
-        if (!user) {
-            return res.status(404).json({ success: false, message: 'User not found' });
-        }
-
-        if (user.isVerified) {
-            return res.status(400).json({ success: false, message: 'Email already verified' });
-        }
-
+        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+        if (user.isVerified) return res.status(400).json({ success: false, message: 'Email already verified' });
         if (!user.isVerificationCodeValid(code)) {
             return res.status(400).json({ success: false, message: 'Invalid or expired code' });
         }
@@ -215,15 +148,7 @@ const verifyEmail = async (req, res) => {
         res.json({
             success: true,
             message: 'Email verified successfully',
-            data: {
-                user: {
-                    id: user._id,
-                    email: user.email,
-                    isVerified: user.isVerified,
-                    isActive: user.isActive
-                },
-                token
-            }
+            data: { user: { id: user._id, email: user.email, isVerified: user.isVerified, isActive: user.isActive }, token }
         });
     } catch (error) {
         console.error('Verification error:', error.message);
@@ -232,33 +157,20 @@ const verifyEmail = async (req, res) => {
 };
 
 // ============================================
-// RESEND VERIFICATION CODE
+// RESEND VERIFICATION
 // ============================================
 const resendVerification = async (req, res) => {
     try {
         const user = await User.findById(req.user._id).select('+verificationCode +verificationCodeExpiry');
-
-        if (!user) {
-            return res.status(404).json({ success: false, message: 'User not found' });
-        }
-
-        if (user.isVerified) {
-            return res.status(400).json({ success: false, message: 'Email already verified' });
-        }
+        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+        if (user.isVerified) return res.status(400).json({ success: false, message: 'Email already verified' });
 
         const code = generateCode();
         user.verificationCode = code;
         user.verificationCodeExpiry = new Date(Date.now() + 10 * 60 * 1000);
         await user.save();
 
-        try {
-            await sendVerificationEmail(user.email, code);
-            console.log('📧 Resent verification email to:', user.email);
-            console.log('🔑 Code:', code);
-        } catch (emailError) {
-            console.error('Email error:', emailError.message);
-        }
-
+        await sendVerificationEmail(user.email, code);
         res.json({ success: true, message: 'Verification code sent' });
     } catch (error) {
         console.error('Resend error:', error.message);
@@ -267,124 +179,141 @@ const resendVerification = async (req, res) => {
 };
 
 // ============================================
-// ACTIVATE ACCOUNT
+// ACTIVATE ACCOUNT (First Deposit)
 // ============================================
 const activateAccount = async (req, res) => {
     try {
         const { phoneNumber, amount } = req.body;
         const user = await User.findById(req.user._id);
 
-        console.log("\n========================================");
-        console.log("🚀 ACCOUNT ACTIVATION REQUEST");
-        console.log("========================================");
-        console.log(`👤 User: ${user.email}`);
-        console.log(`📱 Phone: ${phoneNumber}`);
-        console.log(`💰 Amount: KES ${amount}`);
-        console.log("========================================\n");
-
-        if (!phoneNumber || !amount) {
-            return res.status(400).json({
-                success: false,
-                message: "Phone number and amount are required",
-            });
-        }
-
-        if (user.isActive) {
-            return res.status(400).json({
-                success: false,
-                message: "Account already activated",
-            });
-        }
-
-        if (!user.isVerified) {
-            return res.status(400).json({
-                success: false,
-                message: "Please verify your email first",
-            });
-        }
+        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+        if (user.isActive) return res.status(400).json({ success: false, message: 'Account already activated' });
+        if (!user.isVerified) return res.status(400).json({ success: false, message: 'Please verify your email first' });
 
         const requiredAmount = parseInt(process.env.CAPITAL_REQUIRED) || 200;
         const depositAmount = parseFloat(amount);
-
         if (!depositAmount || depositAmount < requiredAmount) {
             return res.status(400).json({
                 success: false,
-                message: `Minimum deposit for activation is KES ${requiredAmount}`,
+                message: `Minimum activation deposit is KES ${requiredAmount}`
             });
         }
 
-        const timestamp = Date.now();
-        const externalReference = `ACT${timestamp}`;
-
+        const externalReference = `ACT${Date.now()}`;
         const result = await payheroService.initiateSTKPush(
             phoneNumber,
             depositAmount,
             externalReference,
-            `${user.firstName} ${user.lastName}`
+            `${user.firstName} ${user.lastName}`,
+            'Account Activation'
         );
 
         if (!result.success) {
-            console.error("❌ PayHero error:", result.error);
-            return res.status(500).json({
-                success: false,
-                message: result.error || "Failed to initiate payment. Please try again.",
-            });
+            return res.status(500).json({ success: false, message: result.error || 'Payment initiation failed' });
         }
 
         const payment = new Payment({
             user: user._id,
             orderId: externalReference,
             externalReference,
-            phoneNumber: result.formattedPhone || phoneNumber,
+            phoneNumber: result.formattedPhone,
             email: user.email,
-            amount: Math.round(depositAmount),
+            amount: depositAmount,
             customerName: `${user.firstName} ${user.lastName}`,
-            description: "Account Activation - Golden Gates",
-            status: "pending",
-            payheroTransactionId: result.payheroReference || "",
-            paymentChannel: "mpesa",
+            description: 'Account Activation',
+            status: 'pending',
+            payheroTransactionId: result.payheroReference || '',
             isActivation: true,
         });
 
         await payment.save();
 
-        console.log("✅ Payment record saved");
-        console.log(`📱 External Ref: ${externalReference}`);
-        console.log("========================================\n");
-
-        return res.json({
+        res.json({
             success: true,
-            message: "STK Push sent. Check your phone for the M-Pesa prompt.",
+            message: 'STK Push sent. Complete payment to activate your account.',
             data: {
                 externalReference,
-                phoneNumber: result.formattedPhone || phoneNumber,
+                phoneNumber: result.formattedPhone,
                 amount: depositAmount,
-                paymentId: payment._id,
                 status: 'pending',
-            },
+                paymentId: payment._id,
+            }
         });
     } catch (error) {
-        console.error("❌ Activation error:", error);
-        return res.status(500).json({
-            success: false,
-            message: error.message || "Failed to initiate activation",
-        });
+        console.error('Activation error:', error);
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
 // ============================================
-// GET CURRENT USER
+// DEPOSIT (Additional Deposits)
+// ============================================
+const deposit = async (req, res) => {
+    try {
+        const { phoneNumber, amount } = req.body;
+        const user = await User.findById(req.user._id);
+
+        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+        if (!user.isActive) return res.status(400).json({ success: false, message: 'Account not activated' });
+        if (!user.isVerified) return res.status(400).json({ success: false, message: 'Email not verified' });
+
+        if (amount < 100) {
+            return res.status(400).json({ success: false, message: 'Minimum deposit is KES 100' });
+        }
+
+        const externalReference = `DEP${Date.now()}`;
+        const result = await payheroService.initiateSTKPush(
+            phoneNumber,
+            amount,
+            externalReference,
+            `${user.firstName} ${user.lastName}`,
+            'Deposit'
+        );
+
+        if (!result.success) {
+            return res.status(500).json({ success: false, message: result.error || 'Payment initiation failed' });
+        }
+
+        const payment = new Payment({
+            user: user._id,
+            orderId: externalReference,
+            externalReference,
+            phoneNumber: result.formattedPhone,
+            email: user.email,
+            amount: amount,
+            customerName: `${user.firstName} ${user.lastName}`,
+            description: 'Deposit',
+            status: 'pending',
+            payheroTransactionId: result.payheroReference || '',
+            isDeposit: true,
+        });
+
+        await payment.save();
+
+        res.json({
+            success: true,
+            message: 'STK Push sent. Complete payment to deposit funds.',
+            data: {
+                externalReference,
+                phoneNumber: result.formattedPhone,
+                amount: amount,
+                status: 'pending',
+                paymentId: payment._id,
+            }
+        });
+    } catch (error) {
+        console.error('Deposit error:', error);
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ============================================
+// GET ME
 // ============================================
 const getMe = async (req, res) => {
     try {
         const user = await User.findById(req.user._id);
-
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: 'User not found'
-            });
-        }
+        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
 
         res.json({
             success: true,
@@ -404,16 +333,15 @@ const getMe = async (req, res) => {
                     totalTrades: user.totalTrades,
                     totalProfit: user.totalProfit,
                     totalLoss: user.totalLoss,
+                    totalDeposited: user.totalDeposited,
+                    totalWithdrawn: user.totalWithdrawn,
                     createdAt: user.createdAt
                 }
             }
         });
     } catch (error) {
         console.error('Get me error:', error.message);
-        res.status(500).json({
-            success: false,
-            message: 'Server error'
-        });
+        res.status(500).json({ success: false, message: 'Server error' });
     }
 };
 
@@ -423,14 +351,6 @@ const getMe = async (req, res) => {
 const checkActivationStatus = async (req, res) => {
     try {
         const user = await User.findById(req.user._id);
-
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: 'User not found'
-            });
-        }
-
         res.json({
             success: true,
             data: {
@@ -440,108 +360,17 @@ const checkActivationStatus = async (req, res) => {
             }
         });
     } catch (error) {
-        console.error('Check activation error:', error.message);
-        res.status(500).json({
-            success: false,
-            message: 'Server error'
-        });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 
-// ============================================
-// TEST PASSWORD (Debug Only)
-// ============================================
-const testPassword = async (req, res) => {
-    try {
-        const { email, password } = req.body;
-
-        if (!email || !password) {
-            return res.status(400).json({
-                success: false,
-                message: 'Email and password required'
-            });
-        }
-
-        const user = await User.findOne({ email }).select('+password');
-
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: 'User not found'
-            });
-        }
-
-        const isMatch = await user.comparePassword(password);
-
-        res.json({
-            success: true,
-            data: {
-                userExists: true,
-                passwordMatches: isMatch,
-                isVerified: user.isVerified,
-                isActive: user.isActive,
-            }
-        });
-    } catch (error) {
-        console.error('❌ Test error:', error);
-        res.status(500).json({
-            success: false,
-            message: error.message
-        });
-    }
-};
-
-// ============================================
-// FORCE RESET PASSWORD (Debug Only)
-// ============================================
-const forceResetPassword = async (req, res) => {
-    try {
-        const { email, newPassword } = req.body;
-
-        if (!email || !newPassword || newPassword.length < 6) {
-            return res.status(400).json({
-                success: false,
-                message: 'Email and new password (min 6 chars) required'
-            });
-        }
-
-        const user = await User.findOne({ email });
-
-        if (!user) {
-            return res.status(404).json({
-                success: false,
-                message: 'User not found'
-            });
-        }
-
-        const salt = await bcrypt.genSalt(12);
-        user.password = await bcrypt.hash(newPassword, salt);
-        await user.save();
-
-        res.json({
-            success: true,
-            message: 'Password reset successfully'
-        });
-    } catch (error) {
-        console.error('❌ Reset password error:', error);
-        res.status(500).json({
-            success: false,
-            message: error.message
-        });
-    }
-};
-
-// ============================================
-// EXPORT ALL
-// ============================================
 module.exports = {
     register,
     login,
     verifyEmail,
     resendVerification,
     activateAccount,
+    deposit,
     getMe,
     checkActivationStatus,
-    testPassword,
-    forceResetPassword,
 };

@@ -1,27 +1,10 @@
 import React from 'react';
 
-const LoadingSpinner = ({ size = 'md', fullScreen = false, text = '' }) => {
-    const sizeClass = {
-        sm: 'spinner-sm',
-        md: '',
-        lg: 'spinner-lg',
-    }[size] || '';
-
-    const spinner = (
-        <div className="flex-center" style={{ flexDirection: 'column', gap: '12px' }}>
-            <div className={`spinner ${sizeClass}`}></div>
-            {text && <p style={{ color: '#6b7280', fontSize: '14px' }}>{text}</p>}
-        </div>
-    );
-
+const LoadingSpinner = ({ fullScreen = false }) => {
+    const spinner = <div className="w-12 h-12 border-4 border-gray-200 border-t-yellow-500 rounded-full animate-spin"></div>;
     if (fullScreen) {
-        return (
-            <div className="flex-center" style={{ minHeight: '100vh', background: '#f8fafc' }}>
-                {spinner}
-            </div>
-        );
+        return <div className="min-h-screen flex items-center justify-center bg-gray-50">{spinner}</div>;
     }
-
     return spinner;
 };
 
