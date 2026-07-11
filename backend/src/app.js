@@ -11,8 +11,8 @@ const transactionRoutes = require('./routes/transactionRoutes');
 const referralRoutes = require('./routes/referralRoutes');
 const paymentRoutes = require('./routes/paymentRoutes');
 const withdrawalRoutes = require('./routes/withdrawalRoutes');
-const adminRoutes = require('./routes/adminRoutes');
 const adminAuthRoutes = require('./routes/adminAuthRoutes');
+const adminRoutes = require('./routes/adminRoutes');
 
 const app = express();
 
@@ -107,8 +107,8 @@ app.use('/api/transactions', transactionRoutes);
 app.use('/api/referrals', referralRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/withdrawals', withdrawalRoutes);
-app.use('/api/admin', adminRoutes);
 app.use('/api/admin/auth', adminAuthRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
