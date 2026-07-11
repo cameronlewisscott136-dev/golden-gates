@@ -84,14 +84,25 @@ const userSchema = new mongoose.Schema({
     timestamps: true,
 });
 
-// Hash password before saving
+// ============================================
+// PRE-SAVE: Hash password
+// ============================================
 userSchema.pre('save', async function (next) {
-    if (!this.isModified('password')) return next();
-    this.password = await bcrypt.hash(this.password, 12);
-    next();
+    if (!this.isModified('password')) {
+        return next();
+    }
+    try {
+        const salt = await bcrypt.genSalt(12);
+        this.password = await bcrypt.hash(this.password, salt);
+        next();
+    } catch (error) {
+        next(error);
+    }
 });
 
-// Generate referral code
+// ============================================
+// PRE-SAVE: Generate referral code
+// ============================================
 userSchema.pre('save', function (next) {
     if (!this.referralCode) {
         this.referralCode = this.generateReferralCode();
@@ -99,6 +110,9 @@ userSchema.pre('save', function (next) {
     next();
 });
 
+// ============================================
+// METHODS
+// ============================================
 userSchema.methods.generateReferralCode = function () {
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
     let result = '';
@@ -108,8 +122,13 @@ userSchema.methods.generateReferralCode = function () {
     return result;
 };
 
-userSchema.methods.comparePassword = async function (password) {
-    return await bcrypt.compare(password, this.password);
+userSchema.methods.comparePassword = async function (candidatePassword) {
+    try {
+        return await bcrypt.compare(candidatePassword, this.password);
+    } catch (error) {
+        console.error('Password comparison error:', error);
+        return false;
+    }
 };
 
 userSchema.methods.isVerificationCodeValid = function (code) {

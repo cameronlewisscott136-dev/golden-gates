@@ -6,25 +6,35 @@ const {
     resendVerification,
     getMe,
     checkActivationStatus,
-    activateAccount, // Add this import
+    activateAccount,
+    testPassword,
+    forceResetPassword,
 } = require('../controllers/authController');
 const { protect, protectNonActive } = require('../middleware/auth');
 const { registerValidation, loginValidation } = require('../middleware/validation');
 
 const router = express.Router();
 
-// Public routes
+// ============================================
+// PUBLIC ROUTES
+// ============================================
 router.post('/register', registerValidation, register);
 router.post('/login', loginValidation, login);
 
-// Protected routes (non-active users)
+// Debug routes (remove in production)
+router.post('/test-password', testPassword);
+router.post('/force-reset-password', forceResetPassword);
+
+// ============================================
+// PROTECTED ROUTES (Non-active users)
+// ============================================
 router.post('/verify-email', protectNonActive, verifyEmail);
 router.post('/resend-verification', protectNonActive, resendVerification);
+router.post('/activate', protectNonActive, activateAccount);
 
-// Activation route - User must be authenticated but can be non-active
-router.post('/activate', protectNonActive, activateAccount); // Add this line
-
-// Protected routes (active users)
+// ============================================
+// PROTECTED ROUTES (Active users)
+// ============================================
 router.get('/me', protect, getMe);
 router.get('/activation-status', protect, checkActivationStatus);
 
