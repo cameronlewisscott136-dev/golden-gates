@@ -19,7 +19,7 @@ const tradeSchema = new mongoose.Schema({
     amount: {
         type: Number,
         required: true,
-        min: 1,
+        min: 10, // Minimum KES 10
     },
     price: {
         type: Number,
@@ -54,8 +54,53 @@ const tradeSchema = new mongoose.Schema({
     closeTime: {
         type: Date,
     },
+    // Realistic trade metrics
+    entryPrice: {
+        type: Number,
+        required: true,
+    },
+    exitPrice: {
+        type: Number,
+    },
+    profitPercentage: {
+        type: Number,
+        default: 0,
+    },
+    lossPercentage: {
+        type: Number,
+        default: 0,
+    },
+    duration: {
+        type: Number, // in seconds
+        default: 0,
+    },
 }, {
     timestamps: true,
+});
+
+// Calculate profit/loss before saving
+tradeSchema.pre('save', function (next) {
+    if (this.status === 'closed' && this.closePrice) {
+        // Calculate profit/loss based on trade type
+        if (this.type === 'buy') {
+            this.profitLoss = (this.closePrice - this.openPrice) * this.quantity;
+        } else {
+            this.profitLoss = (this.openPrice - this.closePrice) * this.quantity;
+        }
+
+        // Calculate percentages
+        const investment = this.amount;
+        if (investment > 0) {
+            this.profitPercentage = (this.profitLoss / investment) * 100;
+            this.lossPercentage = Math.abs(this.profitPercentage);
+        }
+
+        // Calculate duration
+        if (this.closeTime) {
+            this.duration = Math.floor((this.closeTime - this.openTime) / 1000);
+        }
+    }
+    next();
 });
 
 module.exports = mongoose.model('Trade', tradeSchema);
