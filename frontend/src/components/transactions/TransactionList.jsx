@@ -39,11 +39,11 @@ const TransactionList = () => {
   // HANDLE DEPOSIT - Updated with navigation
   // ============================================
   const handleDeposit = async (e) => {
-    console.log(1);
+    console.log('1');
     e.preventDefault();
-    console.log(2);
+    console.log('2');
     const amount = parseFloat(depositAmount);
-    console.log(3);
+    console.log('3');
     
     if (!amount || amount < 100) {
       toast.error('Minimum deposit is KES 100');
