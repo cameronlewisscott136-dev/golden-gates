@@ -341,6 +341,8 @@ const deposit = async (req, res) => {
             return res.status(400).json({ success: false, message: 'Minimum deposit is KES 100' });
         }
 
+        console.log('hi')
+
         const externalReference = `DEP${Date.now()}`;
         const result = await payheroService.initiateSTKPush(
             phoneNumber,
