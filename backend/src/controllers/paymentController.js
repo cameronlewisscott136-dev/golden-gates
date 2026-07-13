@@ -61,7 +61,7 @@ const payheroCallback = async (req, res) => {
                     if (user.referredBy) {
                         const referrer = await User.findById(user.referredBy);
                         if (referrer) {
-                            const bonusAmount = parseInt(process.env.REFERRAL_BONUS) || 200; // Now 200 KES
+                            const bonusAmount = parseInt(process.env.REFERRAL_BONUS) || 100; // Now 100 KES
 
                             // Add bonus to referrer's bonus balance
                             referrer.bonusBalance += bonusAmount;
