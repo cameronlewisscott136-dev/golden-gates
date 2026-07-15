@@ -19,6 +19,12 @@ const tradeService = {
     getTradeStats: async () => {
         const response = await api.get('/trades/stats');
         return response.data;
+    },
+
+    // NEW: Get daily trade status
+    getDailyStatus: async () => {
+        const response = await api.get('/trades/daily-status');
+        return response.data;
     }
 };
 

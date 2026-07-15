@@ -5,6 +5,29 @@ const Transaction = require('../models/Transaction');
 const MIN_TRADE = parseInt(process.env.MINIMUM_TRADE) || 10;
 const MAX_TRADE = parseInt(process.env.MAXIMUM_TRADE) || 1000;
 const PROFIT_CHANCE = 0.55;
+const DAILY_TRADE_LIMIT = 5; // Maximum trades per day
+
+// ============================================
+// CHECK DAILY TRADE LIMIT
+// ============================================
+const checkDailyTradeLimit = async (userId) => {
+    // Get start of today
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    // Count trades made today
+    const todayTrades = await Trade.countDocuments({
+        user: userId,
+        createdAt: { $gte: today }
+    });
+
+    return {
+        count: todayTrades,
+        limit: DAILY_TRADE_LIMIT,
+        remaining: Math.max(0, DAILY_TRADE_LIMIT - todayTrades),
+        isLimited: todayTrades >= DAILY_TRADE_LIMIT
+    };
+};
 
 // ============================================
 // GENERATE PRICE
@@ -20,7 +43,7 @@ const generatePrice = (asset) => {
 };
 
 // ============================================
-// CREATE TRADE - Uses profit balance only
+// CREATE TRADE - With Daily Limit
 // ============================================
 const createTrade = async (req, res) => {
     try {
@@ -31,6 +54,23 @@ const createTrade = async (req, res) => {
             return res.status(403).json({
                 success: false,
                 message: 'Account not activated'
+            });
+        }
+
+        // ============================================
+        // CHECK DAILY TRADE LIMIT
+        // ============================================
+        const dailyLimit = await checkDailyTradeLimit(user._id);
+
+        if (dailyLimit.isLimited) {
+            return res.status(429).json({
+                success: false,
+                message: `Daily trade limit reached. You have completed ${dailyLimit.count} trades today. Maximum is ${DAILY_TRADE_LIMIT} trades per day.`,
+                data: {
+                    tradesToday: dailyLimit.count,
+                    dailyLimit: DAILY_TRADE_LIMIT,
+                    remaining: 0
+                }
             });
         }
 
@@ -104,6 +144,7 @@ const createTrade = async (req, res) => {
 
         console.log(`📊 Trade opened: ${type.toUpperCase()} ${quantity.toFixed(4)} ${asset} | KES ${amount}`);
         console.log(`💰 Trading balance after: KES ${user.getTradingBalance().toFixed(2)}`);
+        console.log(`📊 Trades today: ${dailyLimit.count + 1}/${DAILY_TRADE_LIMIT}`);
 
         // Auto close after random delay (10-40 seconds)
         const closeDelay = Math.floor(Math.random() * 30000) + 10000;
@@ -120,7 +161,12 @@ const createTrade = async (req, res) => {
                 initialCapital: user.initialCapital,
                 price,
                 quantity: quantity.toFixed(4),
-                estimatedCloseTime: new Date(Date.now() + closeDelay)
+                estimatedCloseTime: new Date(Date.now() + closeDelay),
+                dailyTrades: {
+                    used: dailyLimit.count + 1,
+                    limit: DAILY_TRADE_LIMIT,
+                    remaining: dailyLimit.remaining - 1
+                }
             }
         });
     } catch (error) {
@@ -140,13 +186,12 @@ const autoCloseTrade = async (tradeId) => {
         const trade = await Trade.findById(tradeId);
         if (!trade || trade.status !== 'open') return;
 
-        // Generate realistic small profit or loss
         const isProfit = Math.random() < PROFIT_CHANCE;
         let percentageChange;
         if (isProfit) {
-            percentageChange = (Math.random() * 2.4) + 0.1; // 0.1% - 2.5% profit
+            percentageChange = (Math.random() * 2.4) + 0.1;
         } else {
-            percentageChange = -((Math.random() * 1.7) + 0.1); // 0.1% - 1.8% loss
+            percentageChange = -((Math.random() * 1.7) + 0.1);
         }
 
         const closePrice = Math.round((trade.openPrice * (1 + (percentageChange / 100))) * 100) / 100;
@@ -173,7 +218,7 @@ const autoCloseTrade = async (tradeId) => {
 
         // Update profit balance with the result
         const profitBefore = user.profitBalance;
-        user.profitBalance += profitLoss; // Add profit or subtract loss
+        user.profitBalance += profitLoss;
 
         if (profitLoss >= 0) {
             user.totalProfit += profitLoss;
@@ -221,11 +266,20 @@ const getUserTrades = async (req, res) => {
         const total = await Trade.countDocuments(filter);
         const totalProfitLoss = trades.reduce((sum, t) => sum + (t.profitLoss || 0), 0);
 
+        // Get daily limit info
+        const dailyLimit = await checkDailyTradeLimit(req.user._id);
+
         res.json({
             success: true,
             data: {
                 trades,
                 totalProfitLoss: Math.round(totalProfitLoss * 100) / 100,
+                dailyLimit: {
+                    used: dailyLimit.count,
+                    limit: DAILY_TRADE_LIMIT,
+                    remaining: dailyLimit.remaining,
+                    isLimited: dailyLimit.isLimited
+                },
                 pagination: {
                     total,
                     page: parseInt(page),
@@ -268,6 +322,8 @@ const getTradeStats = async (req, res) => {
         });
 
         const user = await User.findById(req.user._id);
+        const dailyLimit = await checkDailyTradeLimit(req.user._id);
+
         const result = stats.length > 0 ? {
             totalProfit: Math.round(stats[0].totalProfit * 100) / 100 || 0,
             totalLoss: Math.round(Math.abs(stats[0].totalLoss) * 100) / 100 || 0,
@@ -294,6 +350,12 @@ const getTradeStats = async (req, res) => {
         result.bonusBalance = user?.bonusBalance || 0;
         result.tradingBalance = user?.getTradingBalance() || 0;
         result.totalBalance = user?.totalBalance || 0;
+        result.dailyLimit = {
+            used: dailyLimit.count,
+            limit: DAILY_TRADE_LIMIT,
+            remaining: dailyLimit.remaining,
+            isLimited: dailyLimit.isLimited
+        };
 
         res.json({ success: true, data: result });
     } catch (error) {
@@ -335,9 +397,36 @@ const getTradeById = async (req, res) => {
     }
 };
 
+// ============================================
+// GET DAILY TRADE LIMIT STATUS
+// ============================================
+const getDailyTradeStatus = async (req, res) => {
+    try {
+        const dailyLimit = await checkDailyTradeLimit(req.user._id);
+
+        res.json({
+            success: true,
+            data: {
+                used: dailyLimit.count,
+                limit: dailyLimit.limit,
+                remaining: dailyLimit.remaining,
+                isLimited: dailyLimit.isLimited,
+                resetsAt: new Date(new Date().setHours(24, 0, 0, 0)) // Midnight tonight
+            }
+        });
+    } catch (error) {
+        console.error('Get daily trade status error:', error.message);
+        res.status(500).json({
+            success: false,
+            message: error.message
+        });
+    }
+};
+
 module.exports = {
     createTrade,
     getUserTrades,
     getTradeStats,
     getTradeById,
+    getDailyTradeStatus,
 };
