@@ -9,6 +9,7 @@ import { FaPlus, FaEye } from 'react-icons/fa';
 const TradeList = () => {
     const { user, updateUser } = useAuth();
     const [trades, setTrades] = useState([]);
+    const [dailyLimit, setDailyLimit] = useState(null);
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState('all');
     const [totalProfitLoss, setTotalProfitLoss] = useState(0);
@@ -20,6 +21,19 @@ const TradeList = () => {
         const interval = setInterval(refreshBalance, 10000);
         return () => clearInterval(interval);
     }, [filter, pagination.page]);
+
+    useEffect(() => {
+        fetchDailyLimit();
+    }, []);
+
+    const fetchDailyLimit = async () => {
+        try {
+            const response = await tradeService.getDailyStatus();
+            setDailyLimit(response.data);
+        } catch (error) {
+            console.error('Error fetching daily limit:', error);
+        }
+    };
 
     const fetchTrades = async () => {
         setLoading(true);
@@ -61,6 +75,24 @@ const TradeList = () => {
         );
     }
 
+    {
+        dailyLimit && (
+            <div className="mb-4 p-3 bg-blue-50 rounded-lg border border-blue-200">
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                    <span className="text-sm text-blue-700">
+                        📊 Daily Trades: <strong>{dailyLimit.used}/{dailyLimit.limit}</strong>
+                    </span>
+                    <span className="text-sm text-blue-700">
+                        Remaining: <strong>{dailyLimit.remaining}</strong>
+                    </span>
+                    {dailyLimit.isLimited && (
+                        <span className="text-sm text-red-600 font-semibold">⚠️ Limit Reached</span>
+                    )}
+                </div>
+            </div>
+        )
+    }
+
     return (
         <>
             <Navbar />
@@ -93,8 +125,8 @@ const TradeList = () => {
                                 key={status}
                                 onClick={() => setFilter(status)}
                                 className={`px-4 py-2 rounded-lg text-sm font-medium transition ${filter === status
-                                        ? 'bg-yellow-500 text-white shadow-md'
-                                        : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                                    ? 'bg-yellow-500 text-white shadow-md'
+                                    : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
                                     }`}
                             >
                                 {status.charAt(0).toUpperCase() + status.slice(1)}
@@ -155,8 +187,8 @@ const TradeList = () => {
                                             </td>
                                             <td className="px-6 py-4">
                                                 <span className={`px-2 py-1 text-xs font-semibold rounded-full ${trade.status === 'open' ? 'bg-yellow-100 text-yellow-800' :
-                                                        trade.status === 'closed' ? 'bg-blue-100 text-blue-800' :
-                                                            'bg-red-100 text-red-800'
+                                                    trade.status === 'closed' ? 'bg-blue-100 text-blue-800' :
+                                                        'bg-red-100 text-red-800'
                                                     }`}>
                                                     {trade.status}
                                                 </span>
